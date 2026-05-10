@@ -1,0 +1,31 @@
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+
+const app = express();
+const server = http.createServer(app);
+
+app.get('/', (req, res) => {
+  res.send('Servidor Aviator Online');
+});
+
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws) => {
+  console.log('Novo usuário conectado');
+
+  setInterval(() => {
+    const fakeSignal = {
+      multiplier: (Math.random() * 10).toFixed(2),
+      time: new Date()
+    };
+
+    ws.send(JSON.stringify(fakeSignal));
+  }, 3000);
+});
+
+const PORT = process.env.PORT || 3000;
+
+server.listen(PORT, () => {
+  console.log(Servidor rodando na porta ${PORT});
+});
