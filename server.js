@@ -1,8 +1,8 @@
-// Server.js — Simplificado para o Railway
 const express = require('express');
 const cors    = require('cors');
 const WebSocket = require('ws');
 const http    = require('http');
+const axios   = require('axios');
 
 const PORT = process.env.PORT || 8080;
 const app  = express();
@@ -27,18 +27,24 @@ const broadcast = d => {
   clients.forEach(ws => { try { if (ws.readyState === 1) ws.send(s); } catch(_){} });
 };
 
-// Conexão direta e segura via WebSocket nativo
-function connectBlaze() {
-  const wsUrl = 'wss://blaze.com';
-  
-  const ws = new WebSocket(wsUrl, {
-    headers: {
-      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Origin': 'https://blaze.com',
-      'Accept-Language': 'pt-BR,pt;q=0.9'
-    }
-  });
+function loadHistory() {
+  axios.get('blaze.com')
+    .then(r => {
+      const list = r.data?.data || [];
+      rounds = list.map(x => ({
+        multiplier: parseFloat(x.crash_point) || 1,
+        round_id: String(x.id),
+        timestamp: x.created_at || new Date().toISOString(),
+        is_green: parseFloat(x.crash_point) >= 2,
+      }));
+      console.log('✅ Histórico carregado:', rounds.length, 'rodadas');
+    })
+    .catch(e => console.log('❌ Histórico falhou:', e.message));
+}
 
+function connectBlaze() {
+  const ws = new WebSocket('wss://blaze.com');
+  
   ws.on('open', () => {
     console.log('✅ Conexão estabelecida com a Blaze!');
     ws.send('420["cmd",{"id":"subscribe","payload":{"room":"crash_games"}}]');
@@ -78,9 +84,7 @@ function connectBlaze() {
     setTimeout(connectBlaze, 5000); 
   });
 
-  ws.on('error', e => {
-    console.log('❌ Erro na conexão:', e.message);
-  });
+  ws.on('error', e => console.log('❌ Erro na conexão:', e.message));
 }
 
 app.get('/',       (_, res) => res.json({ ok: true, rounds: rounds.length, clients: clients.size }));
@@ -90,5 +94,6 @@ app.get('/status', (_, res) => res.json({ phase, multiplier: mult, total: rounds
 
 server.listen(PORT, '0.0.0.0', () => { 
   console.log('🚀 Servidor ativo na porta:', PORT); 
+  loadHistory();
   connectBlaze(); 
 });
