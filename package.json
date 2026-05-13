@@ -1,20 +1,13 @@
 {
   "name": "ty-prosperity",
   "version": "1.0.0",
-  "description": "Bot de rodadas da Blaze",
   "main": "Server.js",
   "scripts": {
     "start": "node Server.js"
   },
   "dependencies": {
-    "cloudscraper": "^4.6.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "request": "^2.88.2",
-    "request-promise": "^4.2.6",
     "ws": "^8.16.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
