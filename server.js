@@ -1,4 +1,4 @@
-// server.js — Servidor Universal de Rodadas para o Railway
+// server.js — Servidor Oficial de Rodadas focado na Betou
 const express = require('express');
 const cors    = require('cors');
 const WebSocket = require('ws');
@@ -13,7 +13,6 @@ const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 
 let rounds = [], clients = new Set();
-let phase = 'betting', mult = 1.00;
 
 wss.on('connection', ws => {
   clients.add(ws);
@@ -27,33 +26,49 @@ const broadcast = d => {
   clients.forEach(ws => { try { if (ws.readyState === 1) ws.send(s); } catch(_){} });
 };
 
-// Coleta as rodadas de forma estável através de uma API Espelho Global de Crash
-function loadGlobalHistory() {
-  axios.get('dev-partners.com')
+// Puxa as rodadas reais dos jogos de Crash da infraestrutura da Betou
+function loadBetouHistory() {
+  // Rota pública integrada da provedora de crash usada pela Betou
+  axios.get('betou.bet.br')
     .then(r => {
-      const list = r.data || [];
-      rounds = list.slice(0, 100).map((x, index) => ({
-        multiplier: parseFloat(x.multiplier || x.crash_point) || 1.00,
-        round_id: String(x.id || Date.now() - index),
-        timestamp: new Date().toISOString(),
-        is_green: parseFloat(x.multiplier || x.crash_point) >= 2.00,
-      }));
-      console.log('✅ Histórico atualizado com sucesso:', rounds.length, 'rodadas');
+      const list = r.data?.data || r.data || [];
       
-      // Envia as atualizações para os seus usuários conectados
+      rounds = list.slice(0, 100).map((x, index) => ({
+        multiplier: parseFloat(x.multiplier || x.crash_point || x.result) || 1.00,
+        round_id: String(x.id || x.round_id || Date.now() - index),
+        timestamp: x.created_at || new Date().toISOString(),
+        is_green: parseFloat(x.multiplier || x.crash_point || x.result) >= 2.00,
+      }));
+      
+      console.log('✅ Dados da Betou atualizados:', rounds.length, 'rodadas');
       broadcast({ type: 'history', data: rounds });
     })
-    .catch(e => console.log('⚠️ Falha temporária na API Espelho, tentando novamente...'));
+    .catch(e => {
+      // Se a rota direta falhar, ele usa o espelho público do Aviator/Spaceman da Betou
+      axios.get('betou.bet.br')
+        .then(res => {
+          const backupList = res.data?.results || [];
+          rounds = backupList.slice(0, 100).map((x, index) => ({
+            multiplier: parseFloat(x.multiplier || x.value) || 1.00,
+            round_id: String(x.id || Date.now() - index),
+            timestamp: new Date().toISOString(),
+            is_green: parseFloat(x.multiplier || x.value) >= 2.00,
+          }));
+          console.log('✅ Dados da Betou carregados via contingência:', rounds.length);
+          broadcast({ type: 'history', data: rounds });
+        })
+        .catch(_ => console.log('⏳ Aguardando próxima rodada da Betou...'));
+    });
 }
 
-// Configura o robô para buscar novos resultados automaticamente a cada 8 segundos
-setInterval(loadGlobalHistory, 8000);
+// Verifica novos resultados na Betou a cada 5 segundos
+setInterval(loadBetouHistory, 5000);
 
-app.get('/',       (_, res) => res.json({ ok: true, server: 'Active', rounds: rounds.length }));
+app.get('/',       (_, res) => res.json({ ok: true, platform: 'Betou', rounds: rounds.length }));
 app.get('/rounds', (_, res) => res.json(rounds));
 app.get('/rodadas', (_, res) => res.json(rounds));
 
 server.listen(PORT, '0.0.0.0', () => { 
-  console.log('🚀 Servidor rodando com estabilidade na porta:', PORT); 
-  loadGlobalHistory();
+  console.log('🚀 Robô da Betou ativo no Railway na porta:', PORT); 
+  loadBetouHistory();
 });
