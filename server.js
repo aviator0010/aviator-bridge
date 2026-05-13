@@ -1,12 +1,12 @@
-// server.js — HTTP + WebSocket corrigidos para o Railway e Blaze
+// Server.js — HTTP + WebSocket corrigidos para o Railway e Blaze
 // Dependências obrigatórias: express cors ws cloudscraper
 const express = require('express');
 const cors    = require('cors');
 const WebSocket = require('ws');
 const http    = require('http');
-const cloudscraper = require('cloudscraper'); // Substitui o Axios para evitar erro 403/200
+const cloudscraper = require('cloudscraper');
 
-const PORT = process.env.PORT || 8080; // Usa a porta 8080 configurada no Railway
+const PORT = process.env.PORT || 8080;
 const app  = express();
 app.use(cors({ origin: '*' }));
 
@@ -29,10 +29,9 @@ const broadcast = d => {
   clients.forEach(ws => { try { if (ws.readyState === 1) ws.send(s); } catch(_){} });
 };
 
-// Carrega o histórico inicial utilizando o disfarce antiafastamento do Cloudflare
 function loadHistory() {
   const options = {
-    url: 'https://blaze.com/api/crash_games/recent?per_page=100',
+    url: 'blaze.com',
     headers: {
       'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       'Origin': process.env.ORIGIN || 'https://blaze.com',
@@ -61,15 +60,14 @@ function loadHistory() {
   });
 }
 
-// Injeta os cabeçalhos diretamente no aperto de mão (Handshake) do WebSocket público
 function connectBlaze() {
-  const wsUrl = 'wss://blaze.com/realtimesocket/socket.io/?EIO=3&transport=websocket';
+  const wsUrl = 'wss://blaze.com';
   
   const ws = new WebSocket(wsUrl, {
     headers: {
-      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       'Origin': process.env.ORIGIN || 'https://blaze.com',
-      'Accept-Language': process.env.ACCEPT_LANGUAGE || 'pt-BR,pt;q=0.9,en;q=0.8',
+      'Accept-Language': process.env.ACCEPT_LANGUAGE || 'pt-BR,pt;q=0.9',
       'Pragma': 'no-cache',
       'Cache-Control': 'no-cache'
     }
@@ -119,13 +117,11 @@ function connectBlaze() {
   });
 }
 
-// Rotas públicas ajustadas (Sua rota antiga /rounds foi mantida compatível)
 app.get('/',       (_, res) => res.json({ ok: true, rounds: rounds.length, clients: clients.size }));
 app.get('/rounds', (_, res) => res.json(rounds));
-app.get('/rodadas', (_, res) => res.json(rounds)); // Adicionada para aceitar seu teste anterior
+app.get('/rodadas', (_, res) => res.json(rounds));
 app.get('/status', (_, res) => res.json({ phase, multiplier: mult, total: rounds.length }));
 
-// Inicialização amarrada ao HOST externo obrigatório
 server.listen(PORT, '0.0.0.0', () => { 
   console.log('🚀 Servidor ativo na porta externa:', PORT); 
   loadHistory(); 
