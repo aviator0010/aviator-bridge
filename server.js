@@ -43,17 +43,9 @@ function loadHistory() {
 }
 
 function connectBlaze() {
-  const wsUrl = 'wss://blaze.com';
+  const wsUrl = 'wss://api-blaze.com';
   
-  const ws = new WebSocket(wsUrl, {
-    headers: {
-      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Origin': 'https://blaze.com',
-      'Accept-Language': 'pt-BR,pt;q=0.9',
-      'Pragma': 'no-cache',
-      'Cache-Control': 'no-cache'
-    }
-  });
+  const ws = new WebSocket(wsUrl);
   ws.on('open', () => {
     console.log('✅ Conexão estabelecida com a Blaze!');
     ws.send('420["cmd",{"id":"subscribe","payload":{"room":"crash_games"}}]');
