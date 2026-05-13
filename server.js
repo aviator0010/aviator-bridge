@@ -1,13 +1,12 @@
-// server.js — Cole no Railway e dê Deploy
-// HTTP + WebSocket na MESMA porta (obrigatório no Railway)
-// Dependências: express cors ws axios
+// server.js — HTTP + WebSocket corrigidos para o Railway e Blaze
+// Dependências obrigatórias: express cors ws cloudscraper
 const express = require('express');
 const cors    = require('cors');
 const WebSocket = require('ws');
 const http    = require('http');
-const axios   = require('axios');
+const cloudscraper = require('cloudscraper'); // Substitui o Axios para evitar erro 403/200
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; // Usa a porta 8080 configurada no Railway
 const app  = express();
 app.use(cors({ origin: '*' }));
 
@@ -30,29 +29,57 @@ const broadcast = d => {
   clients.forEach(ws => { try { if (ws.readyState === 1) ws.send(s); } catch(_){} });
 };
 
+// Carrega o histórico inicial utilizando o disfarce antiafastamento do Cloudflare
 function loadHistory() {
-  axios.get('https://blaze.com/api/crash_games/recent?per_page=100')
-    .then(r => {
-      const list = r.data?.data || [];
+  const options = {
+    url: 'https://blaze.com/api/crash_games/recent?per_page=100',
+    headers: {
+      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Origin': process.env.ORIGIN || 'https://blaze.com',
+      'Accept-Language': process.env.ACCEPT_LANGUAGE || 'pt-BR,pt;q=0.9'
+    }
+  };
+
+  cloudscraper.get(options, function(error, response, body) {
+    if (error) {
+      console.log('Histórico falhou (Cloudflare):', error.message);
+      return;
+    }
+    try {
+      const resData = JSON.parse(body);
+      const list = resData?.data || [];
       rounds = list.map(x => ({
         multiplier: parseFloat(x.crash_point) || 1,
         round_id: String(x.id),
         timestamp: x.created_at || new Date().toISOString(),
         is_green: parseFloat(x.crash_point) >= 2,
       }));
-      console.log('Histórico:', rounds.length, 'rodadas');
-    })
-    .catch(e => console.log('Histórico falhou:', e.message));
+      console.log('✅ Histórico carregado:', rounds.length, 'rodadas');
+    } catch(e) {
+      console.log('Erro ao ler JSON do histórico:', e.message);
+    }
+  });
 }
 
+// Injeta os cabeçalhos diretamente no aperto de mão (Handshake) do WebSocket público
 function connectBlaze() {
-  const ws = new WebSocket(
-    'wss://blaze.com/realtimesocket/socket.io/?EIO=3&transport=websocket'
-  );
+  const wsUrl = 'wss://blaze.com/realtimesocket/socket.io/?EIO=3&transport=websocket';
+  
+  const ws = new WebSocket(wsUrl, {
+    headers: {
+      'User-Agent': process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Origin': process.env.ORIGIN || 'https://blaze.com',
+      'Accept-Language': process.env.ACCEPT_LANGUAGE || 'pt-BR,pt;q=0.9,en;q=0.8',
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache'
+    }
+  });
+
   ws.on('open', () => {
-    console.log('✅ Blaze conectada');
+    console.log('✅ Conexão estabelecida com sucesso à Blaze!');
     ws.send('420["cmd",{"id":"subscribe","payload":{"room":"crash_games"}}]');
   });
+
   ws.on('message', raw => {
     const m = raw.toString();
     if (m === '2') { ws.send('3'); return; }
@@ -77,16 +104,30 @@ function connectBlaze() {
         phase = 'crashed'; mult = r.multiplier;
         broadcast({ type: 'round', data: r });
         broadcast({ type: 'phase', phase, multiplier: mult });
-        console.log('Rodada:', r.multiplier + 'x');
+        console.log('Rodada coletada:', r.multiplier + 'x');
       }
     } catch(_) {}
   });
-  ws.on('close', () => { console.log('Blaze fechou, reconectando...'); setTimeout(connectBlaze, 5000); });
-  ws.on('error', e => console.log('Erro:', e.message));
+
+  ws.on('close', (code, reason) => { 
+    console.log(`⚠️ Blaze desconectou (Código: ${code}). Reconectando em 5s...`); 
+    setTimeout(connectBlaze, 5000); 
+  });
+
+  ws.on('error', e => {
+    console.log('❌ Erro de barreira na conexão:', e.message);
+  });
 }
 
+// Rotas públicas ajustadas (Sua rota antiga /rounds foi mantida compatível)
 app.get('/',       (_, res) => res.json({ ok: true, rounds: rounds.length, clients: clients.size }));
 app.get('/rounds', (_, res) => res.json(rounds));
+app.get('/rodadas', (_, res) => res.json(rounds)); // Adicionada para aceitar seu teste anterior
 app.get('/status', (_, res) => res.json({ phase, multiplier: mult, total: rounds.length }));
 
-server.listen(PORT, () => { console.log('Porta:', PORT); loadHistory(); connectBlaze(); });
+// Inicialização amarrada ao HOST externo obrigatório
+server.listen(PORT, '0.0.0.0', () => { 
+  console.log('🚀 Servidor ativo na porta externa:', PORT); 
+  loadHistory(); 
+  connectBlaze(); 
+});
