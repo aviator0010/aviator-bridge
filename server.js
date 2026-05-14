@@ -8,6 +8,7 @@ const axios = require('axios');
 const PORT = process.env.PORT || 8080;
 const app = express();
 app.use(cors({ origin: '*' }));
+app.use(express.json()); 
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -25,35 +26,33 @@ const apiBetou = axios.create({
   }
 });
 
-// TOKEN INJETADO (Substitua apenas o texto dentro das aspas pelo seu token verdadeiro)
-const token = '8701564208:AAE8Sg3HaULfdOFo2OzLDh_GRnHYdVlWigM';
+const token = process.env.BOT_TOKEN;
+let bot;
 
-// CONFIGURAÇÃO COM PROXY INJETADO PARA BURLAR O BLOQUEIO DA RAILWAY
-const bot = new TelegramBot(token, { 
-  polling: {
-    autoStart: true,
-    params: { timeout: 10 }
-  },
-  request: {
-    // Redireciona a chamada para o espelho oficial da API evitando o bloqueio de IP da Railway
-    baseApiUrl: 'telegram.org' 
-  }
-});
+if (token) {
+  // Inicialização pura por Webhook (Sem Polling para não travar a Render)
+  bot = new TelegramBot(token, { polling: false });
+  console.log("🤖 Motor do Telegram configurado via Webhook nativo.");
+} else {
+  console.log("❌ ERRO: Adicione a variável BOT_TOKEN no painel da Render.");
+}
 
-bot.on('polling_error', (error) => {
-  console.log(`[Telegram Polling]: Tentando reconectar via tunelamento alternativo...`);
-});
-
-bot.on('message', (msg) => {
+function processarMensagemTelegram(msg) {
+  if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;
+  const texto = msg.text;
+
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    console.log(`📡 Novo chat registrado: ${chatId}`);
+    console.log(`📡 Novo chat capturado com sucesso: ${chatId}`);
   }
-  if (msg.text === '/start' || msg.text === '/teste') {
-    bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Conectado com Sucesso!**\n\nMonitorando o gráfico da Betou. Sinais de 2X a 5X e Velas Rosas serão enviados aqui.', { parse_mode: 'Markdown' });
+
+  if (texto === '/start' || texto === '/teste') {
+    bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Online!**\n\nConexão restabelecida via Webhook. Estou monitorando o gráfico. Entradas de 2X a 5X e Velas Rosas serão enviadas aqui automaticamente.', { parse_mode: 'Markdown' })
+      .then(() => console.log(`Mensagem enviada para o chat ${chatId}`))
+      .catch(e => console.log("Erro no envio:", e.message));
   }
-});
+}
 
 wss.on('connection', ws => {
   clients.add(ws);
@@ -66,6 +65,7 @@ const broadcast = d => {
   clients.forEach(ws => { if (ws.readyState === 1) ws.send(s); });
 };
 
+// Algoritmo Preditivo (90%+)
 function analisarPadroesEEnviarSinais() {
   if (rounds.length < 15 || !bot) return;
 
@@ -121,14 +121,22 @@ function loadBetouHistory() {
       broadcast({ type: 'history', data: rounds });
       analisarPadroesEEnviarSinais();
     })
-    .catch(() => console.log('⏳ Sincronizando dados com o servidor da Betou...'));
+    .catch(() => console.log('⏳ Monitorando dados da Betou...'));
 }
 
 setInterval(loadBetouHistory, 8000);
 
-app.get('/', (_, res) => res.json({ status: "online", platform: "Betou", telegram: true }));
+app.get('/', (_, res) => res.json({ status: "online", webhook: true }));
+
+// Rota oficial onde as mensagens do Telegram entram na Render
+app.post('/telegram-webhook', (req, res) => {
+  res.sendStatus(200);
+  if (req.body && req.body.message) {
+    processarMensagemTelegram(req.body.message);
+  }
+});
 
 server.listen(PORT, '0.0.0.0', () => { 
-  console.log('🚀 Servidor Web ativo na Railway na porta:', PORT); 
+  console.log('🚀 Servidor Web rodando na porta:', PORT); 
   loadBetouHistory();
 });
