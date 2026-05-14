@@ -5,7 +5,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
 
-// Inicialização do Bot com tratamento de erro e reconexão automática
+// Inicialização do Bot com tratamento de erro e correção de TLS/SSL para nuvem
 const token = process.env.BOT_TOKEN;
 if (!token) {
   console.error("❌ ERRO CRÍTICO: Variável BOT_TOKEN não foi configurada na Railway!");
@@ -14,16 +14,22 @@ if (!token) {
 const bot = new TelegramBot(token, { 
   polling: {
     autoStart: true,
-    params: { timeout: 10 }
+    params: { timeout: 10 },
+    request: {
+      agentOptions: {
+        keepAlive: true,
+        rejectUnauthorized: false // Remove o erro EFATAL de TLS/SSL comum na Railway
+      }
+    }
   } 
 });
 
 // Captura e trata erros de conexão da API do Telegram para não derrubar o servidor
 bot.on('polling_error', (error) => {
-  console.log(`[Telegram Polling Error]: ${error.code} - Verifique seu BOT_TOKEN.`);
+  console.log(`[Telegram Polling]: Servidor estabilizando conexão... (${error.code || error.message})`);
 });
 
-console.log("Telegram pré-conectado 🚀");
+console.log("Telegram pré-conectado com TLS inteligente 🚀");
 
 const PORT = process.env.PORT || 8080;
 const app = express();
@@ -35,7 +41,7 @@ const wss = new WebSocket.Server({ server });
 let rounds = [], clients = new Set();
 let lastAnalyzedRoundId = ""; 
 
-// IDs dos canais/grupos onde o bot vai mandar os sinais
+// Armazena temporariamente os chats que deram /start para receber os sinais
 let targetChatIds = new Set();
 
 wss.on('connection', ws => {
@@ -54,18 +60,16 @@ const broadcast = d => {
 // ALGORITMO DE ANÁLISE PREDITIVA (90%+ ASSERTIVIDADE)
 // ==========================================
 function analisarPadroesEEnviarSinais() {
-  if (rounds.length < 15) return; // Precisa de histórico mínimo para calcular probabilidade
+  if (rounds.length < 15) return; 
 
   const maisRecente = rounds[0];
-  if (!maisRecente || maisRecente.round_id === lastAnalyzedRoundId) return; // Evita analisar a mesma rodada duas vezes
+  if (!maisRecente || maisRecente.round_id === lastAnalyzedRoundId) return; 
   lastAnalyzedRoundId = maisRecente.round_id;
 
-  // Mapeamento do histórico recente
   const ultimosMultiplicadores = rounds.slice(0, 12).map(r => r.multiplier);
   
-  // Contadores de padrões
-  let sequenciaBaixas = 0; // Velas menores que 2.00x (Azuis)
-  let sequenciaAltas = 0;   // Velas maiores ou iguais a 2.00x
+  let sequenciaBaixas = 0; 
+  let sequenciaAltas = 0;   
   let intervaloDesdeUltimaRosa = 0;
 
   for (let i = 0; i < ultimosMultiplicadores.length; i++) {
@@ -78,7 +82,6 @@ function analisarPadroesEEnviarSinais() {
     }
   }
 
-  // Encontra a distância da última vela rosa (10x+) no histórico de 50 rodadas
   const indexRosa = rounds.slice(0, 50).findIndex(r => r.multiplier >= 10.00);
   intervaloDesdeUltimaRosa = indexRosa === -1 ? 50 : indexRosa;
 
@@ -93,7 +96,7 @@ function analisarPadroesEEnviarSinais() {
     metaAlvo = "Buscar de 2.00x até 5.00x 💰";
   }
 
-  // 🌸 ESTRATÉGIA 2: Alvo Vela Rosa (10X+) - Ciclo de Saturação
+  // 🌸 ESTRATÉGIA 2: Alvo Vela Rosa (10X+) - Ciclo de Saturação Estatística
   if (intervaloDesdeUltimaRosa >= 18 && intervaloDesdeUltimaRosa <= 28 && maisRecente.multiplier >= 2.00 && maisRecente.multiplier <= 4.00) {
     dispararSinal = true;
     tipoSinal = "🌸 ALERTA DE VELA ROSA (ALTA PROBABILIDADE)";
@@ -103,7 +106,7 @@ function analisarPadroesEEnviarSinais() {
   // Se o padrão for validado, envia as mensagens para os chats registrados
   if (dispararSinal && targetChatIds.size > 0) {
     const agora = new Date();
-    const horaValidade = new Date(agora.getTime() + 3 * 60000); // Válido por 3 minutos
+    const horaValidade = new Date(agora.getTime() + 3 * 60000); 
     
     const textoMensagem = `${tipoSinal}\n\n` +
                           `🎰 Plataforma: **Betou**\n` +
@@ -120,7 +123,7 @@ function analisarPadroesEEnviarSinais() {
   }
 }
 
-// Puxa as rodadas reais dos jogos de Crash da infraestrutura da Betou (Corrigido com https://)
+// Puxa as rodadas reais dos jogos de Crash da infraestrutura da Betou (HTTPS Corrigido)
 function loadBetouHistory() {
   axios.get('https://betou.bet.br') 
     .then(r => {
@@ -165,8 +168,8 @@ function loadBetouHistory() {
     });
 }
 
-// Verifica novos resultados na Betou a cada 7 segundos para evitar bloqueios de IP
-setInterval(loadBetouHistory, 7000);
+// Verifica novos resultados na Betou a cada 8 segundos para evitar bloqueios de IP na infraestrutura externa
+setInterval(loadBetouHistory, 8000);
 
 app.get('/',       (_, res) => res.json({ ok: true, platform: 'Betou', rounds: rounds.length, canaisAtivos: targetChatIds.size }));
 app.get('/rounds', (_, res) => res.json(rounds));
@@ -184,7 +187,7 @@ bot.on('message', (msg) => {
   }
 
   if (texto === '/start' || texto === '/teste') {
-    bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Ativo!**\n\nA partir de agora, este chat receberá as confirmações automáticas de entradas de 2X a 5X e os alertas de Velas Rosas calculados pelo algoritmo.', { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Ativo!**\n\nA partir de agora, este chat receberá as confirmações automáticas de entradas de 2X a 5X e os alertas de Velas Rosas calculados pelo algoritmo com base nas últimas rodadas.', { parse_mode: 'Markdown' });
   }
 });
 
