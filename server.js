@@ -65,17 +65,17 @@ const broadcast = d => {
   clients.forEach(ws => { if (ws.readyState === 1) ws.send(s); });
 };
 
-// Algoritmo de Alta Frequência com Foco em Velas Verdes (2x a 5x)
+// Algoritmo de Alta Frequência Corrigido (Garantia de leitura de Array)
 function analisarPadroesEEnviarSinais() {
-  if (rounds.length < 15 || !bot) return;
+  // Se o array não tiver preenchido as 15 rodadas mínimas, aborta para evitar quebra de índice
+  if (!rounds || rounds.length < 15 || !bot) return;
 
-  const maisRecente = rounds[0];
+  const maisRecente = rounds[0]; // Captura explícita da última rodada do índice 0
   if (!maisRecente || maisRecente.round_id === lastAnalyzedRoundId) return; 
   lastAnalyzedRoundId = maisRecente.round_id;
 
   const ultimosMultiplicadores = rounds.slice(0, 12).map(r => r.multiplier);
   
-  // Contadores de Sequências Diretas
   let sequenciaBaixas = 0; 
   for (let i = 0; i < ultimosMultiplicadores.length; i++) {
     if (ultimosMultiplicadores[i] < 2.00) { sequenciaBaixas++; } else { break; }
@@ -86,12 +86,11 @@ function analisarPadroesEEnviarSinais() {
     if (ultimosMultiplicadores[i] >= 2.00) { sequenciaAltas++; } else { break; }
   }
 
-  // Mapeamento das últimas 3 velas para padrões intercalados
-  const m0 = ultimosMultiplicadores[0]; // Última
-  const m1 = ultimosMultiplicadores[1]; // Penúltima
-  const m2 = ultimosMultiplicadores[2]; // Antepenúltima
+  // Mapeamento explícito das últimas 3 rodadas consecutivas para o padrão Xadrez
+  const m0 = ultimosMultiplicadores[0]; // Rodada Atual que acabou de fechar
+  const m1 = ultimosMultiplicadores[1]; // Rodada Anterior
+  const m2 = ultimosMultiplicadores[2]; // Duas rodadas atrás
 
-  // Localização secundária de velas rosas
   const indexRosa = rounds.slice(0, 50).findIndex(r => r.multiplier >= 10.00);
   let intervaloDesdeUltimaRosa = indexRosa === -1 ? 50 : indexRosa;
 
@@ -100,7 +99,7 @@ function analisarPadroesEEnviarSinais() {
   let metaAlvo = "";
   let probabilidade = "92.0%";
 
-  // 1. PADRÃO: Quebra de Sequência Curta (Excelente assertividade para 2.00x)
+  // PADRÃO 1: Quebra de Sequência Curta (2 a 3 velas baixas consecutivas)
   if (sequenciaBaixas === 2 || sequenciaBaixas === 3) {
     dispararSinal = true;
     tipoSinal = "🎯 ENTRADA CONFIRMADA: Recuperação de Margem Verde";
@@ -108,7 +107,7 @@ function analisarPadroesEEnviarSinais() {
     probabilidade = "94.8%";
   }
   
-  // 2. PADRÃO: Surf de Tendência de Alta (Identifica mercados pagadores para buscar 3.00x a 5.00x)
+  // PADRÃO 2: Surf de Tendência de Alta
   else if (sequenciaAltas >= 1 && sequenciaAltas <= 3 && m0 >= 2.50) {
     dispararSinal = true;
     tipoSinal = "🔥 SURF DE TENDÊNCIA: Gráfico Pagador Detectado";
@@ -116,23 +115,23 @@ function analisarPadroesEEnviarSinais() {
     probabilidade = "91.5%";
   }
 
-  // 3. PADRÃO: Quebra de Alternância Clássica (Mercado xadrez)
-  else if ((m0 < 2 && m1 >= 2 && m2 < 2) || (m0 >= 2 && m1 < 2 && m2 >= 2)) {
+  // PADRÃO 3: Quebra de Alternância Clássica (Xadrez)
+  else if (m0 && m1 && m2 && ((m0 < 2 && m1 >= 2 && m2 < 2) || (m0 >= 2 && m1 < 2 && m2 >= 2))) {
     dispararSinal = true;
     tipoSinal = "⚡ SINAL RELÂMPAGO: Quebra de Padrão Intercalado";
     metaAlvo = "Buscar saída rápida de 1.80x a 2.20x 💸";
     probabilidade = "93.1%";
   }
 
-  // 4. PADRÃO SECUNDÁRIO: Vela Rosa por Aproximação de Ciclo (Apenas se nenhum outro disparar)
+  // PADRÃO 4: Vela Rosa por Ciclo Curto
   else if (intervaloDesdeUltimaRosa >= 15 && intervaloDesdeUltimaRosa <= 35 && m0 >= 2.00) {
     dispararSinal = true;
     tipoSinal = "🌸 ALERTA SECUNDÁRIO: Janela de Vela Rosa Ativa";
-    metaAlvo = "Proteger investimento em 2.00x e arriscar topo 10.00x+ 💎";
+    metaAlvo = "Proteger investimento em 2.00x e buscar topo 10.00x+ 💎";
     probabilidade = "86.4%";
   }
 
-  // Envio do alerta formatado para os chats ativos
+  // Envio imediato para chats validados
   if (dispararSinal && targetChatIds.size > 0) {
     const horaValidade = new Date(Date.now() + 3 * 60000).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
     const textoMensagem = `${tipoSinal}\n\n🎰 Plataforma: **Betou**\n📈 Entrada: Após a vela ${maisRecente.multiplier}x\n🎯 Alvo: **${metaAlvo}**\n⏰ Válido até: ${horaValidade}\n\n⚠️ Probabilidade Calculada: ${probabilidade}`;
