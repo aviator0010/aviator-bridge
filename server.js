@@ -1,3 +1,10 @@
+const TelegramBot = require('node-telegram-bot-api');
+
+const token = process.env.BOT_TOKEN;
+
+const bot = new TelegramBot(token, { polling: true });
+
+console.log("Telegram conectado 🚀");
 // server.js — Servidor Oficial de Rodadas focado na Betou
 const express = require('express');
 const cors    = require('cors');
@@ -70,5 +77,8 @@ app.get('/rodadas', (_, res) => res.json(rounds));
 
 server.listen(PORT, '0.0.0.0', () => { 
   console.log('🚀 Robô da Betou ativo no Railway na porta:', PORT); 
+  bot.on('message', (msg) => {
+    bot.sendMessage(msg.chat.id, 'Bot online 🚀');
+});
   loadBetouHistory();
 });
