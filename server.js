@@ -35,7 +35,7 @@ const wss = new WebSocket.Server({ server });
 let rounds = [], clients = new Set();
 let lastAnalyzedRoundId = ""; 
 
-// IDs dos canais/grupos onde o bot vai mandar os sinais (O bot envia automaticamente para quem interagir ou via ID configurado)
+// IDs dos canais/grupos onde o bot vai mandar os sinais
 let targetChatIds = new Set();
 
 wss.on('connection', ws => {
@@ -57,7 +57,7 @@ function analisarPadroesEEnviarSinais() {
   if (rounds.length < 15) return; // Precisa de histórico mínimo para calcular probabilidade
 
   const maisRecente = rounds[0];
-  if (maisRecente.round_id === lastAnalyzedRoundId) return; // Evita analisar a mesma rodada duas vezes
+  if (!maisRecente || maisRecente.round_id === lastAnalyzedRoundId) return; // Evita analisar a mesma rodada duas vezes
   lastAnalyzedRoundId = maisRecente.round_id;
 
   // Mapeamento do histórico recente
@@ -87,17 +87,13 @@ function analisarPadroesEEnviarSinais() {
   let metaAlvo = "";
 
   // 🎯 ESTRATÉGIA 1: Alvo 2X a 5X (Ciclo de Recuperação após correção)
-  // Gatilho de Alta Assertividade: 3 a 4 velas azuis seguidas quebram a tendência. 
-  // Probabilidade estatística de recuperação na 4ª/5ª rodada é de ~92%
   if (sequenciaBaixas >= 3 && sequenciaBaixas <= 5) {
     dispararSinal = true;
     tipoSinal = "🎯 ENTRADA CONFIRMADA: Padrão de Recuperação";
     metaAlvo = "Buscar de 2.00x até 5.00x 💰";
   }
 
-  // 🌸 ESTRATÉGIA 2: Alvo Vela Rosa (10X+) - Ciclo de Saturação de Minutos e Margem de Minuto Par
-  // Velas rosas operam em ciclos de tempo de 12 a 22 rodadas ou acima de 35 rodadas.
-  // Gatilho: Quando entra em janela de exaustão (mais de 18 rodadas sem rosa) combinado com uma quebra de sequência.
+  // 🌸 ESTRATÉGIA 2: Alvo Vela Rosa (10X+) - Ciclo de Saturação
   if (intervaloDesdeUltimaRosa >= 18 && intervaloDesdeUltimaRosa <= 28 && maisRecente.multiplier >= 2.00 && maisRecente.multiplier <= 4.00) {
     dispararSinal = true;
     tipoSinal = "🌸 ALERTA DE VELA ROSA (ALTA PROBABILIDADE)";
@@ -126,7 +122,7 @@ function analisarPadroesEEnviarSinais() {
 
 // Puxa as rodadas reais dos jogos de Crash da infraestrutura da Betou (Corrigido com https://)
 function loadBetouHistory() {
-  axios.get('betou.bet.br') // Atualizado com protocolo válido
+  axios.get('https://betou.bet.br') 
     .then(r => {
       const list = r.data?.data || r.data?.results || r.data || [];
       if (!Array.isArray(list)) return;
@@ -147,7 +143,7 @@ function loadBetouHistory() {
     })
     .catch(e => {
       // Contingência para rota alternativa da Betou
-      axios.get('betou.bet.br')
+      axios.get('https://betou.bet.br')
         .then(res => {
           const backupList = res.data?.results || res.data?.data || [];
           if (!Array.isArray(backupList)) return;
