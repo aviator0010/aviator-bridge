@@ -84,5 +84,17 @@ server.listen(PORT, '0.0.0.0', () => {
   bot.on('message', (msg) => {
     bot.sendMessage(msg.chat.id, 'Bot online 🚀');
 });
+  // Comando para testar se o robô está lendo as mensagens
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const texto = msg.text;
+
+  console.log(`Mensagem recebida de ${msg.from.first_name}: ${texto}`);
+
+  // Se você digitar /teste no Telegram, o robô vai responder
+  if (texto === '/teste') {
+    bot.sendMessage(chatId, 'Olá! O robô está conectado e funcionando perfeitamente!');
+  }
+});
   loadBetouHistory();
 });
