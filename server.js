@@ -8,7 +8,7 @@ const axios = require('axios');
 const PORT = process.env.PORT || 8080;
 const app = express();
 app.use(cors({ origin: '*' }));
-
+const token = 8701564208:AAE8Sg3HaULfdOFo2OzLDh_GRnHYdVlWigM'';
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
@@ -26,36 +26,31 @@ const apiBetou = axios.create({
   }
 });
 
-// Inicialização segura do Bot (Será ativado apenas após o servidor Web estar online)
-const token = process.env.BOT_TOKEN;
-let bot;
+// TOKEN INJETADO DIRETO NA RAIZ DO CÓDIGO - ELIMINA CONFLITOS DA RAILWAY
+const token = 'COLE_SEU_TOKEN_AQUI_DENTRO_DAS_ASPAS';
 
-if (token) {
-  bot = new TelegramBot(token, { 
-    polling: {
-      autoStart: true,
-      params: { timeout: 10 },
-      request: { agentOptions: { keepAlive: true, rejectUnauthorized: false } }
-    } 
-  });
+const bot = new TelegramBot(token, { 
+  polling: {
+    autoStart: true,
+    params: { timeout: 10 },
+    request: { agentOptions: { keepAlive: true, rejectUnauthorized: false } }
+  } 
+});
 
-  bot.on('polling_error', (error) => {
-    console.log(`[Telegram Polling]: Sincronizando... (${error.message})`);
-  });
+bot.on('polling_error', (error) => {
+  console.log(`[Telegram Polling]: Sincronizando... (${error.message})`);
+});
 
-  bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
-    if (!targetChatIds.has(chatId)) {
-      targetChatIds.add(chatId);
-      console.log(`📡 Novo chat registrado: ${chatId}`);
-    }
-    if (msg.text === '/start' || msg.text === '/teste') {
-      bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Conectado!**\n\nMonitorando o gráfico. Entradas de 2X a 5X e Velas Rosas serão enviadas aqui automaticamente.', { parse_mode: 'Markdown' });
-    }
-  });
-} else {
-  console.log("❌ ERRO: Configure a variável BOT_TOKEN na Railway.");
-}
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  if (!targetChatIds.has(chatId)) {
+    targetChatIds.add(chatId);
+    console.log(`📡 Novo chat registrado: ${chatId}`);
+  }
+  if (msg.text === '/start' || msg.text === '/teste') {
+    bot.sendMessage(chatId, '🤖 **Robô de Sinais Betou Conectado!**\n\nMonitorando o gráfico. Entradas de 2X a 5X e Velas Rosas serão enviadas aqui automaticamente.', { parse_mode: 'Markdown' });
+  }
+});
 
 wss.on('connection', ws => {
   clients.add(ws);
@@ -130,9 +125,8 @@ function loadBetouHistory() {
 
 setInterval(loadBetouHistory, 8000);
 
-app.get('/', (_, res) => res.json({ status: "online", platform: "Betou", telegram: !!bot }));
+app.get('/', (_, res) => res.json({ status: "online", platform: "Betou", telegram: true }));
 
-// Garante que o servidor Web liga PRIMEIRO, eliminando o erro da Railway
 server.listen(PORT, '0.0.0.0', () => { 
   console.log('🚀 Servidor Web ativo na porta:', PORT); 
   loadBetouHistory();
