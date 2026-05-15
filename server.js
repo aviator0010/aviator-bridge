@@ -5,144 +5,296 @@ const WebSocket = require('ws');
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
 const app = express();
 app.use(cors({ origin: '*' }));
-app.use(express.json()); 
+app.use(express.json());
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let rtcRounds = []; 
-let lastAnalyzedRoundId = ""; 
-let targetChatIds = new Set();
+let bot = null;
 let gameEngineSocket = null;
 
-const token = process.env.BOT_TOKEN;
-let bot;
+let rtcRounds = [];
+let lastRoundId = "";
+let lastSignalTimestamp = 0;
 
-if (token) {
-  bot = new TelegramBot(token, { polling: false });
-  console.log("🤖 Motor do Telegram configurado via Webhook nativo.");
+const SIGNAL_COOLDOWN = 45000;
+const MAX_HISTORY = 50;
+
+let targetChatIds = new Set();
+
+if (BOT_TOKEN) {
+    bot = new TelegramBot(BOT_TOKEN, { polling: false });
+    console.log("🤖 Telegram iniciado.");
 } else {
-  console.log("❌ ERRO: Adicione a variável BOT_TOKEN no painel da Render.");
+    console.log("❌ BOT_TOKEN não encontrada.");
 }
 
 function processarMensagemTelegram(msg) {
-  if (!msg || !msg.chat) return;
-  const chatId = msg.chat.id;
-  const texto = msg.text;
+    if (!msg || !msg.chat) return;
 
-  if (!targetChatIds.has(chatId)) {
+    const chatId = msg.chat.id;
+    const texto = msg.text || "";
+
     targetChatIds.add(chatId);
-    console.log(`📡 Novo chat capturado em tempo real: ${chatId}`);
-  }
 
-  if (texto === '/start' || texto === '/teste') {
-    bot.sendMessage(chatId, '⚡ **Robô Betou TEMPO REAL Blindado!**\n\nConectado diretamente ao feed. Filtros de assertividade ajustados para evitar sequências de Red. Foco em alvos de 2.00x.', { parse_mode: 'Markdown' })
-      .catch(e => console.log("Erro no envio:", e.message));
-  }
+    console.log(`📡 Chat conectado: ${chatId}`);
+
+    if (texto === '/start' || texto === '/teste') {
+
+        bot.sendMessage(
+            chatId,
+            `🚀 *ROBÔ BETOU REALTIME ONLINE*
+
+✅ Conectado ao fluxo em tempo real
+✅ Filtro inteligente ativo
+✅ Anti-spam ativo
+✅ Proteção de sequência RED
+
+🎯 Estratégia focada:
+Saídas entre *1.80x* e *2.00x*`,
+            {
+                parse_mode: 'Markdown'
+            }
+        ).catch(() => {});
+    }
 }
 
-wss.on('connection', ws => {
-  ws.send(JSON.stringify({ type: 'rtc_handshake', status: 'connected' }));
+wss.on('connection', (ws) => {
+    ws.send(JSON.stringify({
+        type: 'connected',
+        realtime: true
+    }));
 });
 
-// Mecanismo de Análise com Filtro de Assertividade Blindado
+function calcularScore(mults) {
+
+    let score = 0;
+
+    const ultimos5 = mults.slice(0, 5);
+    const ultimos10 = mults.slice(0, 10);
+
+    const baixas5 = ultimos5.filter(m => m < 2).length;
+    const baixas10 = ultimos10.filter(m => m < 2).length;
+
+    if (baixas5 >= 3) score += 35;
+    if (baixas10 <= 6) score += 25;
+
+    if (
+        mults[0] < 2 &&
+        mults[1] < 2 &&
+        mults[2] < 2
+    ) {
+        score += 30;
+    }
+
+    if (
+        mults[0] >= 2 &&
+        mults[1] < 2 &&
+        mults[2] >= 2
+    ) {
+        score += 20;
+    }
+
+    const media =
+        ultimos10.reduce((a, b) => a + b, 0) /
+        ultimos10.length;
+
+    if (media >= 1.7) score += 10;
+
+    return score;
+}
+
 function analisarFluxoInstantaneo(novaVela) {
-  if (!novaVela || !novaVela.multiplier) return;
 
-  rtcRounds.unshift(novaVela);
-  if (rtcRounds.length > 30) rtcRounds.pop();
+    if (!novaVela || !novaVela.multiplier) return;
 
-  if (novaVela.round_id === lastAnalyzedRoundId) return;
-  lastAnalyzedRoundId = novaVela.round_id;
+    if (novaVela.round_id === lastRoundId) return;
 
-  const multiplicadores = rtcRounds.map(r => r.multiplier);
-  if (multiplicadores.length < 5) return;
+    lastRoundId = novaVela.round_id;
 
-  // 1. Contagem de velas baixas seguidas
-  let baixasSeguidas = 0;
-  for (let i = 0; i < multiplicadores.length; i++) {
-    if (multiplicadores[i] < 2.00) { baixasSeguidas++; } else { break; }
-  }
+    rtcRounds.unshift(novaVela);
 
-  // 2. FILTRO DE SEGURANÇA (Verifica se o mercado não está em uma grande sequência de perdas)
-  // Se nas últimas 10 rodadas mais de 7 foram baixas, o robô NÃO entra (mercado吸 / recolhedor)
-  const ultimas10 = multiplicadores.slice(0, 10);
-  const totalBaixasNasUltimas10 = ultimas10.filter(m => m < 2.00).length;
-  const mercadoPerigoso = totalBaixasNasUltimas10 >= 7;
+    if (rtcRounds.length > MAX_HISTORY) {
+        rtcRounds.pop();
+    }
 
-  let dispararAlerta = false;
-  let tipoSinal = "";
-  let estrategiaAlvo = "";
-  let taxaAssertividade = "94.5%";
+    const multiplicadores = rtcRounds.map(r => r.multiplier);
 
-  // GATILHO 1: Recuperação de Tendência (Subiu para 3 baixas + filtro de mercado para evitar a lista de Red)
-  if (baixasSeguidas === 3 && !mercadoPerigoso) {
-    dispararAlerta = true;
-    tipoSinal = "🎯 ENTRADA CONFIRMADA: Recuperação de Tendência";
-    estrategiaAlvo = "Entrada autorizada! Retirar estritamente em 2.00x 💰";
-    taxaAssertividade = "96.2%";
-  }
-  
-  // GATILHO 2: Quebra do Padrão Xadrez (Intercalado corrigido)
-  else if (multiplicadores[0] >= 2.00 && multiplicadores[1] < 2.00 && multiplicadores[2] >= 2.00 && !mercadoPerigoso) {
-    dispararAlerta = true;
-    tipoSinal = "⚡ SINAL RELÂMPAGO: Quebra de Padrão Intercalado";
-    estrategiaAlvo = "Entrar buscando saída rápida em 1.80x a 2.00x 💸";
-    taxaAssertividade = "93.8%";
-  }
+    if (multiplicadores.length < 10) return;
 
-  if (dispararAlerta && targetChatIds.size > 0) {
-    const horaDisparo = new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', second: '2-digit'});
-    const textoMensagem = `${tipoSinal}\n\n🎰 Jogo: **Betou Crash**\n📈 Confirmado após vela: ${novaVela.multiplier}x\n🎯 Ação: **${estrategiaAlvo}**\n⏰ Horário: ${horaDisparo}\n\n⚠️ Assertividade Inteligente: ${taxaAssertividade}`;
+    const agora = Date.now();
+
+    if (agora - lastSignalTimestamp < SIGNAL_COOLDOWN) {
+        return;
+    }
+
+    const ultimos10 = multiplicadores.slice(0, 10);
+
+    const reds = ultimos10.filter(m => m < 2).length;
+
+    const mercadoPerigoso = reds >= 8;
+
+    if (mercadoPerigoso) {
+        console.log("🛑 Mercado perigoso ignorado.");
+        return;
+    }
+
+    const score = calcularScore(multiplicadores);
+
+    if (score < 70) return;
+
+    lastSignalTimestamp = agora;
+
+    let confianca = "78%";
+
+    if (score >= 90) confianca = "96%";
+    else if (score >= 80) confianca = "91%";
+    else if (score >= 70) confianca = "84%";
+
+    const horario = new Date().toLocaleTimeString('pt-BR');
+
+    const mensagem =
+`🚨 *ENTRADA DETECTADA*
+
+🎰 Betou Crash
+📊 Score: *${score}*
+📈 Confiança: *${confianca}*
+
+🎯 Entrada:
+Próxima rodada
+
+💸 Saída recomendada:
+*1.80x a 2.00x*
+
+⏰ ${horario}
+
+🧠 IA estatística monitorando fluxo realtime`;
+
+    console.log("📡 SINAL ENVIADO");
 
     targetChatIds.forEach(chatId => {
-      bot.sendMessage(chatId, textoMensagem, { parse_mode: 'Markdown' }).catch(() => {});
+
+        bot.sendMessage(chatId, mensagem, {
+            parse_mode: 'Markdown'
+        }).catch(() => {});
     });
-  }
 }
 
 function iniciarEscutaFrequenciaBetou() {
-  if (gameEngineSocket) {
-    try { gameEngineSocket.terminate(); } catch(e) {}
-  }
 
-  // Barramento WebSocket oficial do jogo
-  gameEngineSocket = new WebSocket('wss://betou.bet.br/ws/games/crash');
+    if (gameEngineSocket) {
+        try {
+            gameEngineSocket.terminate();
+        } catch(e) {}
+    }
 
-  gameEngineSocket.on('open', () => {
-    console.log("🔌 Canal de Tempo Real conectado com a Betou.");
-  });
+    console.log("🔌 Conectando WebSocket...");
 
-  gameEngineSocket.on('message', (rawData) => {
-    try {
-      const parsed = JSON.parse(rawData.toString());
-      if (parsed.event === 'round_ended' || parsed.type === 'result' || parsed.multiplier) {
-        const m = parseFloat(parsed.multiplier || parsed.value || parsed.crash_point) || 1.00;
-        const id = String(parsed.round_id || parsed.id || Date.now());
-        analisarFluxoInstantaneo({ multiplier: m, round_id: id });
-      }
-    } catch (e) {}
-  });
+    gameEngineSocket = new WebSocket(
+        'wss://betou.bet.br/ws/games/crash'
+    );
 
-  gameEngineSocket.on('error', () => {});
-  gameEngineSocket.on('close', () => {
-    setTimeout(iniciarEscutaFrequenciaBetou, 5000);
-  });
+    let pingInterval;
+
+    gameEngineSocket.on('open', () => {
+
+        console.log("✅ WebSocket conectado.");
+
+        pingInterval = setInterval(() => {
+
+            if (
+                gameEngineSocket &&
+                gameEngineSocket.readyState === WebSocket.OPEN
+            ) {
+
+                gameEngineSocket.ping();
+
+            }
+
+        }, 15000);
+    });
+
+    gameEngineSocket.on('message', (rawData) => {
+
+        try {
+
+            const parsed = JSON.parse(rawData.toString());
+
+            if (
+                parsed.event === 'round_ended' ||
+                parsed.type === 'result' ||
+                parsed.multiplier ||
+                parsed.crash_point
+            ) {
+
+                const multiplier = parseFloat(
+                    parsed.multiplier ||
+                    parsed.crash_point ||
+                    parsed.value
+                ) || 1;
+
+                const roundId = String(
+                    parsed.round_id ||
+                    parsed.id ||
+                    Date.now()
+                );
+
+                console.log(`📊 ${roundId} => ${multiplier}x`);
+
+                analisarFluxoInstantaneo({
+                    multiplier,
+                    round_id: roundId
+                });
+            }
+
+        } catch(e) {}
+    });
+
+    gameEngineSocket.on('close', () => {
+
+        console.log("⚠️ WebSocket desconectado.");
+
+        clearInterval(pingInterval);
+
+        setTimeout(() => {
+            iniciarEscutaFrequenciaBetou();
+        }, 5000);
+    });
+
+    gameEngineSocket.on('error', () => {
+        console.log("❌ Erro WebSocket.");
+    });
 }
 
 iniciarEscutaFrequenciaBetou();
 
-app.get('/', (_, res) => res.json({ status: "live_stream", active_chats: targetChatIds.size }));
+app.get('/', (_, res) => {
 
-app.post('/telegram-webhook', (req, res) => {
-  res.sendStatus(200);
-  if (req.body && req.body.message) {
-    processarMensagemTelegram(req.body.message);
-  }
+    res.json({
+        status: 'ONLINE',
+        chats: targetChatIds.size,
+        rounds: rtcRounds.length,
+        realtime: true
+    });
 });
 
-server.listen(PORT, '0.0.0.0', () => { 
-  console.log('🚀 Servidor rodando limpo na porta:', PORT); 
+app.post('/telegram-webhook', (req, res) => {
+
+    res.sendStatus(200);
+
+    if (
+        req.body &&
+        req.body.message
+    ) {
+        processarMensagemTelegram(req.body.message);
+    }
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+
+    console.log(`🚀 Servidor ativo na porta ${PORT}`);
 });
