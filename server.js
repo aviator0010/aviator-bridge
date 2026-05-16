@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
-const { io } = require('socket.io-client'); // Alterado para socket.io-client
+const WebSocket = require('ws'); // Mantido o 'ws' que já estava instalado no seu projeto
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
@@ -11,8 +11,10 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 const token = process.env.BOT_TOKEN;
+
 if (!token) {
   console.log("❌ BOT_TOKEN não configurado.");
   process.exit(1);
@@ -20,13 +22,14 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: false });
 
-// URL unificada do Socket.io do site alvo
-const SOCKET_URL = 'wss://betou.bet.br'; 
+// URL estruturada para o formato correto que o Socket.io do site espera receber
+const SOCKET_URL = 'wss://betou.bet.br/socket.io/?EIO=4&transport=websocket';
 
 let currentSocket = null;
 let targetChatIds = new Set();
 let rounds = [];
 let lastRoundId = null;
+let reconnectDelay = 5000;
 
 function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
@@ -107,16 +110,22 @@ function analisarRodada(nova) {
   }
 }
 
-// Filtra e normaliza os dados recebidos do evento do servidor
-function processarDadosEvento(data) {
+function extrairMultiplicador(textoLimpo) {
   try {
-    if (!data) return null;
+    // Tenta capturar qualquer estrutura JSON válida dentro da mensagem do Socket.io
+    const jsonMatch = textoLimpo.match(/[\{\[].*[\}\]]/);
+    if (!jsonMatch) return null;
+
+    const obj = JSON.parse(jsonMatch[0]);
     
-    // Procura propriedades comuns em payloads de cassino
-    let multiplier = data.multiplier || data.crash_point || data.value || data.coef || data.result;
+    // Se for um array (padrão do Socket.io eventos: ["nome_evento", dados])
+    let dados = Array.isArray(obj) ? obj[1] : obj;
+    if (!dados) return null;
+
+    let multiplier = dados.multiplier || dados.crash_point || dados.value || dados.coef || dados.result;
     
-    if (data.data) {
-      multiplier = multiplier || data.data.multiplier || data.data.crash_point || data.data.value;
+    if (dados.data) {
+      multiplier = multiplier || dados.data.multiplier || dados.data.crash_point || dados.data.value;
     }
 
     multiplier = parseFloat(multiplier);
@@ -124,58 +133,77 @@ function processarDadosEvento(data) {
 
     return {
       multiplier,
-      round_id: data.round_id || data.id || data.round || Date.now().toString()
+      round_id: dados.round_id || dados.id || dados.round || Date.now().toString()
     };
-  } catch (err) {
+  } catch {
     return null;
   }
 }
 
 function iniciarSocket() {
-  log("🔌 Conectando ao barramento Socket.io...");
+  log("🔌 Tentando conectar ao barramento seguro:", SOCKET_URL);
 
-  // Configuração com headers simulando um navegador para evitar bloqueio automático
-  currentSocket = io(SOCKET_URL, {
-    path: '/socket.io/',
-    transports: ['websocket'],
-    forceNew: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 5000,
-    extraHeaders: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // Criando a conexão WS nativa injetando Headers de simulação de navegador web real
+  currentSocket = new WebSocket(SOCKET_URL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       'Origin': 'https://betou.bet.br',
       'Referer': 'https://betou.bet.br'
     }
   });
 
-  currentSocket.on('connect', () => {
-    log("✅ Conectado com sucesso via Socket.io!");
-    
-    // ALERTA: Muitas plataformas exigem que você envie um evento de "subscrição" ao conectar.
-    // Se o robô conectar mas não receber mensagens, descomente a linha abaixo e ajuste o nome do evento.
-    // currentSocket.emit('join', { room: 'crash' }); 
+  let pingInterval = null;
+
+  currentSocket.on('open', () => {
+    log("✅ Conectado com sucesso ao site!");
+    reconnectDelay = 5000;
+
+    // Protocolo Socket.io: Envia o código "2" periodimanete para manter a sessão ativa
+    pingInterval = setInterval(() => {
+      try {
+        if (currentSocket.readyState === WebSocket.OPEN) {
+          currentSocket.send('2'); 
+        }
+      } catch {}
+    }, 25000);
   });
 
-  // Ouvinte genérico de eventos para capturar as rodadas independente do nome do evento do site
-  currentSocket.onAny((evento, data) => {
-    // Ignora eventos internos do socket.io
-    if (['connect', 'disconnect', 'connect_error'].includes(evento)) return;
+  currentSocket.on('message', raw => {
+    const texto = raw.toString();
 
-    const resultado = processarDadosEvento(data);
+    // Protocolo Socket.io: Se receber "3", responde com o ping de volta
+    if (texto === '3') {
+      currentSocket.send('2');
+      return;
+    }
+
+    const resultado = extrairMultiplicador(texto);
     if (resultado) {
-      log(`📊 Rodada detectada [Evento: ${evento}]:`, resultado.multiplier);
+      log("📊 Rodada em tempo real detectada:", resultado.multiplier);
       analisarRodada(resultado);
     }
   });
 
-  currentSocket.on('connect_error', (err) => {
-    log("❌ Erro na estrutura do socket:", err.message);
+  currentSocket.on('error', err => {
+    log("❌ Erro de conexão física no Socket. O servidor pode estar instável.");
   });
 
-  currentSocket.on('disconnect', (reason) => {
-    log("🔄 Socket desconectado. Motivo:", reason);
+  currentSocket.on('close', () => {
+    log("🔄 Conexão encerrada. Tentando reconectar...");
+    if (pingInterval) clearInterval(pingInterval);
+
+    setTimeout(() => {
+      iniciarSocket();
+    }, reconnectDelay);
+
+    // Ajuste dinâmico de tempo de espera para evitar sobrecarga
+    reconnectDelay = Math.min(reconnectDelay + 2000, 20000);
   });
 }
+
+wss.on('connection', ws => {
+  ws.send(JSON.stringify({ status: 'online' }));
+});
 
 app.post('/telegram-webhook', (req, res) => {
   res.sendStatus(200);
@@ -195,5 +223,5 @@ app.get('/', (_, res) => {
 iniciarSocket();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor proxy ativo na porta ${PORT}`);
+  log(`🚀 Servidor de monitoramento rodando na porta ${PORT}`);
 });
