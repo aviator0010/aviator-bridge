@@ -1,8 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
-const cheerio = require('cheerio'); // Adicionado para raspagem limpa de dados da interface
+const WebSocket = require('ws');
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
@@ -19,37 +18,44 @@ if (!token) {
   process.exit(1);
 }
 
-const bot = new TelegramBot(token, { polling: false });
+// Retornamos ao polling do Telegram para garantir autonomia completa do servidor
+const bot = new TelegramBot(token, { polling: true });
 
-// URL da página onde roda o Crash da plataforma
-const TARGET_URL = 'https://betou.bet.br'; 
+// Lista de endpoints dos servidores centrais de iGaming mapeados
+const ENDPOINTS_PROVEDOR = [
+  'wss://api.betou.bet.br/socket.io/?EIO=4&transport=websocket',
+  'wss://://salsatechnology.com',
+  'wss://betou.bet.br/socket.io/?EIO=4&transport=websocket'
+];
 
+let endpointIndex = 0;
+let currentSocket = null;
 let targetChatIds = new Set();
 let rounds = [];
-let lastMultiplier = null;
-let pollingInterval = null;
+let lastRoundId = null;
+let reconnectDelay = 3000;
 
 function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
 }
 
-function registrarChat(msg) {
+bot.on('message', (msg) => {
   if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;
 
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    log("📡 Novo chat registrado:", chatId);
+    log("📡 Novo chat registrado via Polling:", chatId);
   }
 
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento Inteligente Ativo.`,
+      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento em tempo real ativo.`,
       { parse_mode: 'Markdown' }
     );
   }
-}
+});
 
 function calcularScore(mults) {
   let score = 0;
@@ -73,7 +79,7 @@ function calcularScore(mults) {
   const media = ultimos10.reduce((a, b) => a + b, 0) / ultimos10.length;
   if (media >= 1.8) score += 10;
 
-  const ultimo = mults[0];
+  const ultimo = mults;
   if (ultimo >= 1.5 && ultimo < 2) score += 10;
 
   return { score, redsSeguidos, media };
@@ -92,10 +98,12 @@ function enviarSinal(tipo, entrada, score) {
 
 function analisarRodada(nova) {
   if (!nova || !nova.multiplier) return;
+  if (nova.round_id === lastRoundId) return;
 
+  lastRoundId = nova.round_id;
   rounds.unshift(nova);
-  if (rounds.length > 50) rounds.pop();
 
+  if (rounds.length > 50) rounds.pop();
   const mults = rounds.map(r => r.multiplier);
   if (mults.length < 10) return;
 
@@ -106,77 +114,111 @@ function analisarRodada(nova) {
   }
 }
 
-async function rasparHistoricoDaTela() {
+function extrairMultiplicador(rawText) {
   try {
-    // Carrega o HTML cru da página fingindo ser um navegador Windows comum
-    const { data } = await axios.get(TARGET_URL, {
-      timeout: 6000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
-      }
-    });
+    // Alvos de extração baseados nos padrões purificados de provedores de Crash
+    const jsonMatch = rawText.match(/[\{\[].*[\}\]]/);
+    if (!jsonMatch) return null;
 
-    const $ = cheerio.load(data);
-    let multiplicadoresEncontrados = [];
+    const obj = JSON.parse(jsonMatch);
+    let payload = Array.isArray(obj) ? obj : obj;
 
-    // Busca classes e blocos de texto que contenham o formato de multiplicador (Ex: 1.50x ou 2.10x)
-    $('div, span, p').each((_, elemento) => {
-      const texto = $(elemento).text().trim().toLowerCase();
-      if (texto.endsWith('x') && !texto.includes(' ') && texto.length <= 7) {
-        const num = parseFloat(texto.replace('x', ''));
-        if (!isNaN(num) && num >= 1.00 && !multiplicadoresEncontrados.includes(num)) {
-          multiplicadoresEncontrados.push(num);
-        }
-      }
-    });
-
-    if (multiplicadoresEncontrados.length === 0) return;
-
-    // A rodada mais recente é o primeiro multiplicador listado na tela
-    const ultimoMultDaTela = multiplicadoresEncontrados[0];
-
-    // Se mudou o multiplicador em relação ao loop anterior, significa que uma nova rodada acabou!
-    if (ultimoMultDaTela !== lastMultiplier) {
-      lastMultiplier = ultimoMultDaTela;
-      log(`📊 Nova rodada identificada na tela do jogo: ${ultimoMultDaTela}x`);
-      
-      analisarRodada({
-        multiplier: ultimoMultDaTela,
-        round_id: Date.now().toString()
-      });
+    let multiplier = payload.multiplier || payload.crash_point || payload.value || payload.coef || payload.result;
+    
+    if (payload.data) {
+      multiplier = multiplier || payload.data.multiplier || payload.data.crash_point || payload.data.value;
     }
 
-  } catch (err) {
-    log("⚠️ Conexão flutuante com a interface. Tentando novamente no próximo ciclo...");
+    multiplier = parseFloat(multiplier);
+    if (!multiplier || isNaN(multiplier)) return null;
+
+    return {
+      multiplier,
+      round_id: payload.round_id || payload.id || payload.round || Date.now().toString()
+    };
+  } catch {
+    return null;
   }
 }
 
-function iniciarMonitoramento() {
-  log("📡 Sistema de Scraper de interface ativado. Monitorando tela do Crash...");
-  
-  // Executa a leitura da tela do jogo a cada 4 segundos
-  pollingInterval = setInterval(rasparHistoricoDaTela, 4000);
-}
+function conectarBarramentoProvedor() {
+  const urlAtual = ENDPOINTS_PROVEDOR[endpointIndex];
+  log("🔌 Conectando ao barramento central:", urlAtual);
 
-app.post('/telegram-webhook', (req, res) => {
-  res.sendStatus(200);
-  if (req.body && req.body.message) {
-    registrarChat(req.body.message);
-  }
-});
+  // Injeção de Handshake de iGaming para mascarar o servidor do Render como um nó de gateway legítimo
+  currentSocket = new WebSocket(urlAtual, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Origin': 'https://betou.bet.br',
+      'Referer': 'https://betou.bet.br',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+    }
+  });
+
+  let pingInterval = null;
+
+  currentSocket.on('open', () => {
+    log("✅ Integração com o barramento realizada com sucesso!");
+    reconnectDelay = 3000;
+
+    // Envia pacotes de Keep-Alive estruturados de 20 em 20 segundos
+    pingInterval = setInterval(() => {
+      try {
+        if (currentSocket.readyState === WebSocket.OPEN) {
+          // Protocolo híbrido Engine.io / WS nativo
+          currentSocket.send('2'); 
+          currentSocket.send(JSON.stringify({ type: 'ping' }));
+        }
+      } catch {}
+    }, 20000);
+  });
+
+  currentSocket.on('message', data => {
+    const texto = data.toString();
+
+    // Tratamento imediato de Keep-Alive do provedor
+    if (texto === '3') {
+      currentSocket.send('2');
+      return;
+    }
+
+    const resultado = extrairMultiplicador(texto);
+    if (resultado) {
+      log("📊 Rodada detectada em tempo real:", resultado.multiplier);
+      analisarRodada(resultado);
+    }
+  });
+
+  currentSocket.on('error', () => {
+    // Silencia logs poluídos de rede e foca na alternância de rotas
+  });
+
+  currentSocket.on('close', () => {
+    log("🔄 Conexão encerrada pelo barramento. Alternando rota de dados...");
+    if (pingInterval) clearInterval(pingInterval);
+
+    // Rotaciona os endpoints caso um caia ou seja bloqueado
+    endpointIndex = (endpointIndex + 1) % ENDPOINTS_PROVEDOR.length;
+
+    setTimeout(() => {
+      conectarBarramentoProvedor();
+    }, reconnectDelay);
+
+    reconnectDelay = Math.min(reconnectDelay + 2000, 15000);
+  });
+}
 
 app.get('/', (_, res) => {
   res.json({
     status: 'online',
-    mode: 'HTML Scraper',
-    chats: targetChatIds.size,
-    rounds: rounds.length
+    engine: 'iGaming Provider Bus Monitoring',
+    chats_ativos: targetChatIds.size,
+    rodadas_processadas: rounds.length
   });
 });
 
-iniciarMonitoramento();
+conectarBarramentoProvedor();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor central operando perfeitamente na porta ${PORT}`);
+  log(`🚀 Servidor central de inteligência ativo na porta ${PORT}`);
 });
