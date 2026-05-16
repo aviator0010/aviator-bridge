@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
-const WebSocket = require('ws');
+const { io } = require('socket.io-client'); // Alterado para socket.io-client
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
@@ -11,10 +11,8 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
 const token = process.env.BOT_TOKEN;
-
 if (!token) {
   console.log("❌ BOT_TOKEN não configurado.");
   process.exit(1);
@@ -22,22 +20,13 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: false });
 
-const SOCKETS = [
-  'wss://betou.bet.br/ws/games/crash',
-  'wss://betou.bet.br/socket.io/?EIO=4&transport=websocket',
-  'wss://betou.bet.br/ws',
-  'wss://betou.bet.br/websocket'
-];
+// URL unificada do Socket.io do site alvo
+const SOCKET_URL = 'wss://betou.bet.br'; 
 
-let socketIndex = 0;
 let currentSocket = null;
-
 let targetChatIds = new Set();
-
 let rounds = [];
 let lastRoundId = null;
-
-let reconnectDelay = 5000;
 
 function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
@@ -45,12 +34,11 @@ function log(...msg) {
 
 function registrarChat(msg) {
   if (!msg || !msg.chat) return;
-
   const chatId = msg.chat.id;
 
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    log("📡 Novo chat:", chatId);
+    log("📡 Novo chat registrado:", chatId);
   }
 
   if (msg.text === '/start') {
@@ -64,7 +52,6 @@ function registrarChat(msg) {
 
 function calcularScore(mults) {
   let score = 0;
-
   let redsSeguidos = 0;
 
   for (let i = 0; i < mults.length; i++) {
@@ -76,46 +63,26 @@ function calcularScore(mults) {
   if (redsSeguidos >= 4) score += 15;
 
   const ultimos10 = mults.slice(0, 10);
-
   const greens = ultimos10.filter(v => v >= 2).length;
   const reds = ultimos10.filter(v => v < 2).length;
 
   if (greens >= 4) score += 20;
-
   if (reds <= 6) score += 10;
 
-  const media =
-    ultimos10.reduce((a, b) => a + b, 0) / ultimos10.length;
-
+  const media = ultimos10.reduce((a, b) => a + b, 0) / ultimos10.length;
   if (media >= 1.8) score += 10;
 
   const ultimo = mults[0];
-
   if (ultimo >= 1.5 && ultimo < 2) score += 10;
 
-  return {
-    score,
-    redsSeguidos,
-    media
-  };
+  return { score, redsSeguidos, media };
 }
 
 function enviarSinal(tipo, entrada, score) {
   if (!targetChatIds.size) return;
-
   const horario = new Date().toLocaleTimeString('pt-BR');
 
-  const texto =
-`🎯 ${tipo}
-
-📈 Entrada confirmada
-💰 Alvo: 2.00x+
-🧠 Score de confiança: ${score}/100
-⏰ ${horario}
-
-⚠️ Gestão recomendada:
-- Entrada moderada
-- Stop após sequência negativa`;
+  const texto = `🎯 ${tipo}\n\n📈 Entrada confirmada\n💰 Alvo: 2.00x+\n🧠 Score de confiança: ${score}/100\n⏰ ${horario}\n\n⚠️ Gestão recomendada:\n- Entrada moderada\n- Stop após sequência negativa`;
 
   targetChatIds.forEach(chatId => {
     bot.sendMessage(chatId, texto).catch(() => {});
@@ -124,166 +91,109 @@ function enviarSinal(tipo, entrada, score) {
 
 function analisarRodada(nova) {
   if (!nova || !nova.multiplier) return;
-
   if (nova.round_id === lastRoundId) return;
 
   lastRoundId = nova.round_id;
-
   rounds.unshift(nova);
 
   if (rounds.length > 50) rounds.pop();
-
   const mults = rounds.map(r => r.multiplier);
-
   if (mults.length < 10) return;
 
   const analise = calcularScore(mults);
 
   if (analise.score >= 70) {
-    enviarSinal(
-      "SINAL CONFIRMADO",
-      nova.multiplier,
-      analise.score
-    );
+    enviarSinal("SINAL CONFIRMADO", nova.multiplier, analise.score);
   }
 }
 
-function extrairMultiplicador(data) {
+// Filtra e normaliza os dados recebidos do evento do servidor
+function processarDadosEvento(data) {
   try {
-    const obj = JSON.parse(data);
-
-    let multiplier = null;
-
-    multiplier =
-      obj.multiplier ||
-      obj.crash_point ||
-      obj.value ||
-      obj.coef ||
-      obj.result;
-
-    if (obj.data) {
-      multiplier =
-        multiplier ||
-        obj.data.multiplier ||
-        obj.data.crash_point ||
-        obj.data.value ||
-        obj.data.coef;
+    if (!data) return null;
+    
+    // Procura propriedades comuns em payloads de cassino
+    let multiplier = data.multiplier || data.crash_point || data.value || data.coef || data.result;
+    
+    if (data.data) {
+      multiplier = multiplier || data.data.multiplier || data.data.crash_point || data.data.value;
     }
 
     multiplier = parseFloat(multiplier);
-
     if (!multiplier || isNaN(multiplier)) return null;
 
     return {
       multiplier,
-      round_id:
-        obj.round_id ||
-        obj.id ||
-        obj.round ||
-        Date.now().toString()
+      round_id: data.round_id || data.id || data.round || Date.now().toString()
     };
-
-  } catch {
+  } catch (err) {
     return null;
   }
 }
 
 function iniciarSocket() {
+  log("🔌 Conectando ao barramento Socket.io...");
 
-  const url = SOCKETS[socketIndex];
-
-  log("🔌 Tentando conectar:", url);
-
-  currentSocket = new WebSocket(url);
-
-  let pingInterval = null;
-
-  currentSocket.on('open', () => {
-
-    log("✅ Conectado:", url);
-
-    reconnectDelay = 5000;
-
-    pingInterval = setInterval(() => {
-
-      try {
-
-        if (currentSocket.readyState === WebSocket.OPEN) {
-          currentSocket.send('ping');
-        }
-
-      } catch {}
-
-    }, 15000);
-
+  // Configuração com headers simulando um navegador para evitar bloqueio automático
+  currentSocket = io(SOCKET_URL, {
+    path: '/socket.io/',
+    transports: ['websocket'],
+    forceNew: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 5000,
+    extraHeaders: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Origin': 'https://betou.bet.br',
+      'Referer': 'https://betou.bet.br'
+    }
   });
 
-  currentSocket.on('message', raw => {
+  currentSocket.on('connect', () => {
+    log("✅ Conectado com sucesso via Socket.io!");
+    
+    // ALERTA: Muitas plataformas exigem que você envie um evento de "subscrição" ao conectar.
+    // Se o robô conectar mas não receber mensagens, descomente a linha abaixo e ajuste o nome do evento.
+    // currentSocket.emit('join', { room: 'crash' }); 
+  });
 
-    const texto = raw.toString();
+  // Ouvinte genérico de eventos para capturar as rodadas independente do nome do evento do site
+  currentSocket.onAny((evento, data) => {
+    // Ignora eventos internos do socket.io
+    if (['connect', 'disconnect', 'connect_error'].includes(evento)) return;
 
-    const resultado = extrairMultiplicador(texto);
-
+    const resultado = processarDadosEvento(data);
     if (resultado) {
-      log("📊 Rodada:", resultado.multiplier);
+      log(`📊 Rodada detectada [Evento: ${evento}]:`, resultado.multiplier);
       analisarRodada(resultado);
     }
-
   });
 
-  currentSocket.on('error', err => {
-    log("❌ Erro socket");
+  currentSocket.on('connect_error', (err) => {
+    log("❌ Erro na estrutura do socket:", err.message);
   });
 
-  currentSocket.on('close', () => {
-
-    log("🔄 Socket fechado");
-
-    if (pingInterval) clearInterval(pingInterval);
-
-    socketIndex++;
-
-    if (socketIndex >= SOCKETS.length) {
-      socketIndex = 0;
-    }
-
-    setTimeout(() => {
-      iniciarSocket();
-    }, reconnectDelay);
-
-    reconnectDelay = Math.min(reconnectDelay + 2000, 20000);
-
+  currentSocket.on('disconnect', (reason) => {
+    log("🔄 Socket desconectado. Motivo:", reason);
   });
 }
 
-wss.on('connection', ws => {
-  ws.send(JSON.stringify({
-    status: 'online'
-  }));
-});
-
 app.post('/telegram-webhook', (req, res) => {
-
   res.sendStatus(200);
-
   if (req.body && req.body.message) {
     registrarChat(req.body.message);
   }
-
 });
 
 app.get('/', (_, res) => {
-
   res.json({
     status: 'online',
     chats: targetChatIds.size,
     rounds: rounds.length
   });
-
 });
 
 iniciarSocket();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor ativo na porta ${PORT}`);
+  log(`🚀 Servidor proxy ativo na porta ${PORT}`);
 });
