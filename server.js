@@ -1,12 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
+const { io } = require('socket.io-client');
 const http = require('http');
-const puppeteer = require('puppeteer'); // Alvo principal da mudança técnica
 
 const PORT = process.env.PORT || 8080;
 
-const app = express();
+const app = reportService = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -20,6 +20,10 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: false });
 
+// URL limpa da plataforma para conexão direta com o barramento do socket
+const BASE_URL = 'https://betou.bet.br';
+
+let currentSocket = null;
 let targetChatIds = new Set();
 let rounds = [];
 let lastRoundId = null;
@@ -40,7 +44,7 @@ function registrarChat(msg) {
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento em tempo real via Browser ativo.`,
+      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento em tempo real ativo.`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -103,88 +107,83 @@ function analisarRodada(nova) {
   }
 }
 
-// Expõe a função do Node para ser chamada diretamente de dentro do navegador do Puppeteer
-async function registrarRodadaDoBrowser(multiplier, id) {
-  const multFloat = parseFloat(multiplier);
-  if (!multFloat || isNaN(multFloat)) return;
+function extrairMultiplicador(dados) {
+  if (!dados) return null;
+  try {
+    let payload = dados;
+    
+    // Desembrulha arrays comuns enviados pelo Socket.io
+    if (Array.isArray(dados)) {
+      payload = dados.find(item => typeof item === 'object') || dados[1] || dados[0];
+    }
 
-  const resultado = {
-    multiplier: multFloat,
-    round_id: id || Date.now().toString()
-  };
+    if (typeof payload === 'string') {
+      payload = JSON.parse(payload);
+    }
 
-  log("📊 Rodada em tempo real via Browser:", resultado.multiplier);
-  analisarRodada(resultado);
+    let multiplier = payload.multiplier || payload.crash_point || payload.value || payload.coef || payload.result;
+    
+    if (payload.data) {
+      multiplier = multiplier || payload.data.multiplier || payload.data.crash_point || payload.data.value || payload.data.coef;
+    }
+
+    multiplier = parseFloat(multiplier);
+    if (!multiplier || isNaN(multiplier)) return null;
+
+    return {
+      multiplier,
+      round_id: payload.round_id || payload.id || payload.round || Date.now().toString()
+    };
+  } catch (err) {
+    return null;
+  }
 }
 
-async function iniciarMonitoramentoNavegador() {
-  log("🌐 Inicializando navegador virtual anti-bloqueio...");
+function iniciarSocket() {
+  log("🔌 Conectando ao barramento Socket.io...");
 
-  try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled'
-      ]
-    });
+  // Passa headers idênticos aos de um navegador para burlar o bloqueio inicial do Render
+  currentSocket = io(BASE_URL, {
+    path: '/socket.io/',
+    transports: ['websocket'],
+    secure: true,
+    rejectUnauthorized: false,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 4000,
+    extraHeaders: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Origin': BASE_URL,
+      'Referer': BASE_URL + '/'
+    }
+  });
 
-    const page = await browser.newPage();
+  currentSocket.on('connect', () => {
+    log("✅ Conectado com sucesso à Betou!");
     
-    // Define um User-Agent real para não ser pego pelo Cloudflare
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    // Envia comandos de escuta caso a sala do crash exija registro prévio
+    currentSocket.emit('join', { room: 'crash' });
+    currentSocket.emit('subscribe', 'crash');
+  });
 
-    // Torna a função do Node visível para o JavaScript da página
-    await page.exposeFunction('enviarRodadaAoNode', registrarRodadaDoBrowser);
+  // Captura absolutamente qualquer evento transmitido pelo servidor da casa de apostas
+  currentSocket.onAny((evento, dados) => {
+    if (['connect', 'disconnect', 'connect_error', 'error'].includes(evento)) return;
 
-    // Injeta a lógica de escuta direto no protótipo do WebSocket antes da página carregar
-    await page.evaluateOnNewDocument(() => {
-      const OriginalWebSocket = window.WebSocket;
-      
-      window.WebSocket = function (url, protocols) {
-        const ws = new OriginalWebSocket(url, protocols);
-        
-        ws.addEventListener('message', (event) => {
-          try {
-            const dadosTexto = event.data;
-            
-            // Regra genérica para capturar estruturas de multiplicador em JSON
-            if (dadosTexto.includes('multiplier') || dadosTexto.includes('crash_point') || dadosTexto.includes('coef')) {
-              const jsonMatch = dadosTexto.match(/[\{\[].*[\}\]]/);
-              if (jsonMatch) {
-                const obj = JSON.parse(jsonMatch[0]);
-                let dados = Array.isArray(obj) ? obj[1] || obj[0] : obj;
-                
-                let m = dados.multiplier || dados.crash_point || dados.coef || dados.value;
-                let id = dados.round_id || dados.id || dados.round;
-                
-                if (m) window.enviarRodadaAoNode(m, id);
-              }
-            }
-          } catch (e) {}
-        });
-        
-        return ws;
-      };
-      
-      window.WebSocket.prototype = OriginalWebSocket.prototype;
-    });
+    const resultado = extrairMultiplicador(dados);
+    if (resultado) {
+      log(`📊 Rodada capturada [Canal: ${evento}]:`, resultado.multiplier);
+      analisarRodada(resultado);
+    }
+  });
 
-    log("🔗 Acessando a plataforma Betou...");
-    await page.goto('https://betou.bet.br', { waitUntil: 'networkidle2', timeout: 60000 });
-    log("✅ Navegador conectado e monitorando tráfego interno!");
+  currentSocket.on('connect_error', (err) => {
+    log("⚠️ Tentando transpor bloqueio de porta física... Erro atual:", err.message);
+  });
 
-    // Trata fechamento inesperado do navegador recomeçando o processo
-    browser.on('disconnected', () => {
-      log("🔄 Navegador fechado inesperadamente. Reiniciando...");
-      setTimeout(iniciarMonitoramentoNavegador, 5000);
-    });
-
-  } catch (err) {
-    log("❌ Erro ao subir estrutura do navegador:", err.message);
-    setTimeout(iniciarMonitoramentoNavegador, 10000);
-  }
+  currentSocket.on('disconnect', (motivo) => {
+    log("🔄 Conexão interrompida pelo servidor. Motivo:", motivo);
+  });
 }
 
 app.post('/telegram-webhook', (req, res) => {
@@ -202,8 +201,8 @@ app.get('/', (_, res) => {
   });
 });
 
-iniciarMonitoramentoNavegador();
+iniciarSocket();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor central ativo na porta ${PORT}`);
+  log(`🚀 Servidor central operando na porta ${PORT}`);
 });
