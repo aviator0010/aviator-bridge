@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
-const WebSocket = require('ws');
+const axios = require('axios');
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
@@ -14,26 +14,21 @@ const server = http.createServer(app);
 
 const token = process.env.BOT_TOKEN;
 if (!token) {
-  console.log("❌ BOT_TOKEN não configurado.");
+  console.log("❌ BOT_TOKEN não configurado nas variáveis de ambiente do Render.");
   process.exit(1);
 }
 
-// Retornamos ao polling do Telegram para garantir autonomia completa do servidor
 const bot = new TelegramBot(token, { polling: true });
 
-// Lista de endpoints dos servidores centrais de iGaming mapeados
-const ENDPOINTS_PROVEDOR = [
-  'wss://api.betou.bet.br/socket.io/?EIO=4&transport=websocket',
-  'wss://://salsatechnology.com',
-  'wss://betou.bet.br/socket.io/?EIO=4&transport=websocket'
-];
+const AVIATOR_API_URL = 'https://spribegaming.com';
 
-let endpointIndex = 0;
-let currentSocket = null;
+// 🔗 CONFIGURE AQUI A PLATAFORMA QUE VOCÊ QUER DIVULGAR NO SINAL
+const NOME_PLATAFORMA = "EstrelaBet"; 
+const LINK_PLATAFORMA = "https://estrelabet.com"; // Cole aqui o seu link de afiliado se tiver
+
 let targetChatIds = new Set();
 let rounds = [];
 let lastRoundId = null;
-let reconnectDelay = 3000;
 
 function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
@@ -45,180 +40,133 @@ bot.on('message', (msg) => {
 
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    log("📡 Novo chat registrado via Polling:", chatId);
+    log("📡 Novo chat/canal ativado:", chatId);
   }
 
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento em tempo real ativo.`,
+      `✈️ **Robô Aviator Profissional Lançado!**\n\n🎯 Alvo Principal: **2.00x até 5.00x**\n📡 Monitoramento do feed central ativo 24/7.`,
       { parse_mode: 'Markdown' }
     );
   }
 });
 
-function calcularScore(mults) {
+function calcularEstrategiaAviator(mults) {
   let score = 0;
   let redsSeguidos = 0;
 
   for (let i = 0; i < mults.length; i++) {
-    if (mults[i] < 2) redsSeguidos++;
+    if (mults[i] < 2.0) redsSeguidos++;
     else break;
   }
 
-  if (redsSeguidos >= 3) score += 35;
-  if (redsSeguidos >= 4) score += 15;
+  if (redsSeguidos === 3) score += 40;
+  if (redsSeguidos === 4) score += 25;
+  if (redsSeguidos >= 5) score += 15;
 
   const ultimos10 = mults.slice(0, 10);
-  const greens = ultimos10.filter(v => v >= 2).length;
-  const reds = ultimos10.filter(v => v < 2).length;
+  const greensDesejados = ultimos10.filter(v => v >= 2.0 && v <= 5.0).length;
 
-  if (greens >= 4) score += 20;
-  if (reds <= 6) score += 10;
+  if (greensDesejados >= 3) score += 20;
 
-  const media = ultimos10.reduce((a, b) => a + b, 0) / ultimos10.length;
-  if (media >= 1.8) score += 10;
-
-  const ultimo = mults;
-  if (ultimo >= 1.5 && ultimo < 2) score += 10;
-
-  return { score, redsSeguidos, media };
+  return { score, redsSeguidos };
 }
 
-function enviarSinal(tipo, entrada, score) {
+function enviarSinalTelegram(multiplicadorAnterior, score) {
   if (!targetChatIds.size) return;
   const horario = new Date().toLocaleTimeString('pt-BR');
 
-  const texto = `🎯 ${tipo}\n\n📈 Entrada confirmada\n💰 Alvo: 2.00x+\n🧠 Score de confiança: ${score}/100\n⏰ ${horario}\n\n⚠️ Gestão recomendada:\n- Entrada moderada\n- Stop após sequência negativa`;
+  const texto = 
+`✈️ **SINAL CONFIRMADO - AVIATOR**
+
+🏛️ **Plataforma:** ${NOME_PLATAFORMA}
+📈 **Entrada:** Após a Vela de ${multiplicadorAnterior.toFixed(2)}x
+💰 **Alvo Ideal:** 2.00x a 5.00x
+🧠 **Assertividade:** ${score}%
+⏰ **Horário:** ${horario}
+
+⚠️ **Instruções:**
+- Faça o primeiro Auto-Cashout em 2.00x
+- Deixe uma proteção buscar a zona de 5.00x`;
+
+  // Cria o botão profissional embaixo da mensagem do sinal
+  const opcoes = {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: `📱 Jogar na ${NOME_PLATAFORMA} 🚀`, url: LINK_PLATAFORMA }
+        ]
+      ]
+    }
+  };
 
   targetChatIds.forEach(chatId => {
-    bot.sendMessage(chatId, texto).catch(() => {});
+    bot.sendMessage(chatId, texto, opcoes).catch(() => {});
   });
 }
 
-function analisarRodada(nova) {
+function analisarNovaRodada(nova) {
   if (!nova || !nova.multiplier) return;
   if (nova.round_id === lastRoundId) return;
 
   lastRoundId = nova.round_id;
-  rounds.unshift(nova);
+  rounds.unshift(nova.multiplier);
 
-  if (rounds.length > 50) rounds.pop();
-  const mults = rounds.map(r => r.multiplier);
-  if (mults.length < 10) return;
+  if (rounds.length > 30) rounds.pop();
+  
+  log(`📊 Rodada Aviator Detectada: ${nova.multiplier.toFixed(2)}x`);
 
-  const analise = calcularScore(mults);
+  if (rounds.length < 5) return;
 
-  if (analise.score >= 70) {
-    enviarSinal("SINAL CONFIRMADO", nova.multiplier, analise.score);
+  const analise = calcularEstrategiaAviator(rounds);
+
+  if (analise.score >= 65) {
+    enviarSinalTelegram(nova.multiplier, analise.score);
   }
 }
 
-function extrairMultiplicador(rawText) {
+async function buscarDadosProvedorAviator() {
   try {
-    // Alvos de extração baseados nos padrões purificados de provedores de Crash
-    const jsonMatch = rawText.match(/[\{\[].*[\}\]]/);
-    if (!jsonMatch) return null;
+    const resposta = await axios.get(AVIATOR_API_URL, {
+      timeout: 4000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    });
 
-    const obj = JSON.parse(jsonMatch);
-    let payload = Array.isArray(obj) ? obj : obj;
+    let dados = resposta.data;
+    if (!dados || !Array.isArray(dados.history)) return;
 
-    let multiplier = payload.multiplier || payload.crash_point || payload.value || payload.coef || payload.result;
-    
-    if (payload.data) {
-      multiplier = multiplier || payload.data.multiplier || payload.data.crash_point || payload.data.value;
+    const ultimaRodada = dados.history[0];
+    const multiplier = parseFloat(ultimaRodada.crash_value || ultimaRodada.value || ultimaRodada.multiplier);
+    const round_id = (ultimaRodada.id || ultimaRodada.round_id || ultimaRodada.game_id).toString();
+
+    if (multiplier && !isNaN(multiplier)) {
+      analisarNovaRodada({ multiplier, round_id });
     }
-
-    multiplier = parseFloat(multiplier);
-    if (!multiplier || isNaN(multiplier)) return null;
-
-    return {
-      multiplier,
-      round_id: payload.round_id || payload.id || payload.round || Date.now().toString()
-    };
-  } catch {
-    return null;
+  } catch (err) {
+    // Silencia oscilações de rede
   }
 }
 
-function conectarBarramentoProvedor() {
-  const urlAtual = ENDPOINTS_PROVEDOR[endpointIndex];
-  log("🔌 Conectando ao barramento central:", urlAtual);
-
-  // Injeção de Handshake de iGaming para mascarar o servidor do Render como um nó de gateway legítimo
-  currentSocket = new WebSocket(urlAtual, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      'Origin': 'https://betou.bet.br',
-      'Referer': 'https://betou.bet.br',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
-    }
-  });
-
-  let pingInterval = null;
-
-  currentSocket.on('open', () => {
-    log("✅ Integração com o barramento realizada com sucesso!");
-    reconnectDelay = 3000;
-
-    // Envia pacotes de Keep-Alive estruturados de 20 em 20 segundos
-    pingInterval = setInterval(() => {
-      try {
-        if (currentSocket.readyState === WebSocket.OPEN) {
-          // Protocolo híbrido Engine.io / WS nativo
-          currentSocket.send('2'); 
-          currentSocket.send(JSON.stringify({ type: 'ping' }));
-        }
-      } catch {}
-    }, 20000);
-  });
-
-  currentSocket.on('message', data => {
-    const texto = data.toString();
-
-    // Tratamento imediato de Keep-Alive do provedor
-    if (texto === '3') {
-      currentSocket.send('2');
-      return;
-    }
-
-    const resultado = extrairMultiplicador(texto);
-    if (resultado) {
-      log("📊 Rodada detectada em tempo real:", resultado.multiplier);
-      analisarRodada(resultado);
-    }
-  });
-
-  currentSocket.on('error', () => {
-    // Silencia logs poluídos de rede e foca na alternância de rotas
-  });
-
-  currentSocket.on('close', () => {
-    log("🔄 Conexão encerrada pelo barramento. Alternando rota de dados...");
-    if (pingInterval) clearInterval(pingInterval);
-
-    // Rotaciona os endpoints caso um caia ou seja bloqueado
-    endpointIndex = (endpointIndex + 1) % ENDPOINTS_PROVEDOR.length;
-
-    setTimeout(() => {
-      conectarBarramentoProvedor();
-    }, reconnectDelay);
-
-    reconnectDelay = Math.min(reconnectDelay + 2000, 15000);
-  });
+function iniciarRobo() {
+  log("📡 Conectando ao barramento global de estatísticas do Aviator...");
+  setInterval(buscarDadosProvedorAviator, 5000);
 }
 
 app.get('/', (_, res) => {
   res.json({
     status: 'online',
-    engine: 'iGaming Provider Bus Monitoring',
-    chats_ativos: targetChatIds.size,
-    rodadas_processadas: rounds.length
+    game: 'Aviator',
+    plataforma_alvo: NOME_PLATAFORMA
   });
 });
 
-conectarBarramentoProvedor();
+iniciarRobo();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor central de inteligência ativo na porta ${PORT}`);
+  log(`🚀 Robô Aviator Operando com sucesso na porta ${PORT}`);
 });
