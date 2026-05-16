@@ -1,12 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const cors = require('cors');
-const { io } = require('socket.io-client');
+const axios = require('axios'); // Usando o axios que já está no seu package.json
 const http = require('http');
 
 const PORT = process.env.PORT || 8080;
 
-const app = reportService = express();
+const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -20,13 +20,13 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: false });
 
-// URL limpa da plataforma para conexão direta com o barramento do socket
-const BASE_URL = 'https://betou.bet.br';
+// URL da API de histórico público do Crash da Betou
+const API_URL = 'https://betou.bet.br'; 
 
-let currentSocket = null;
 let targetChatIds = new Set();
 let rounds = [];
 let lastRoundId = null;
+let pollingInterval = null;
 
 function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
@@ -44,7 +44,7 @@ function registrarChat(msg) {
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento em tempo real ativo.`,
+      `⚡ Robô Crash Online\n\n🎯 Estratégia focada em alvo 2x+\n📡 Monitoramento HTTP em tempo real ativo.`,
       { parse_mode: 'Markdown' }
     );
   }
@@ -107,83 +107,56 @@ function analisarRodada(nova) {
   }
 }
 
-function extrairMultiplicador(dados) {
-  if (!dados) return null;
+// Função que busca os dados da API simulando perfeitamente um navegador comum
+async function buscarRodadasNaAPI() {
   try {
-    let payload = dados;
-    
-    // Desembrulha arrays comuns enviados pelo Socket.io
-    if (Array.isArray(dados)) {
-      payload = dados.find(item => typeof item === 'object') || dados[1] || dados[0];
-    }
+    const resposta = await axios.get(API_URL, {
+      timeout: 5000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': 'https://betou.bet.br',
+        'Referer': 'https://betou.bet.br'
+      }
+    });
 
-    if (typeof payload === 'string') {
-      payload = JSON.parse(payload);
-    }
+    // Mapeamento dinâmico para encontrar a lista de resultados no JSON retornado
+    let listaRodadas = resposta.data;
+    if (resposta.data.data) listaRodadas = resposta.data.data;
+    if (resposta.data.results) listaRodadas = resposta.data.results;
+    if (resposta.data.items) listaRodadas = resposta.data.items;
 
-    let multiplier = payload.multiplier || payload.crash_point || payload.value || payload.coef || payload.result;
+    if (!Array.isArray(listaRodadas) || listaRodadas.length === 0) return;
+
+    // Pega a rodada mais recente (geralmente o primeiro item do array da API)
+    const ultimaRodadaBruta = listaRodadas[0];
     
-    if (payload.data) {
-      multiplier = multiplier || payload.data.multiplier || payload.data.crash_point || payload.data.value || payload.data.coef;
-    }
+    let multiplier = ultimaRodadaBruta.multiplier || ultimaRodadaBruta.crash_point || ultimaRodadaBruta.coef || ultimaRodadaBruta.value || ultimaRodadaBruta.result;
+    let round_id = ultimaRodadaBruta.round_id || ultimaRodadaBruta.id || ultimaRodadaBruta.round;
 
     multiplier = parseFloat(multiplier);
-    if (!multiplier || isNaN(multiplier)) return null;
 
-    return {
-      multiplier,
-      round_id: payload.round_id || payload.id || payload.round || Date.now().toString()
-    };
+    if (multiplier && !isNaN(multiplier)) {
+      const resultado = { multiplier, round_id: round_id ? round_id.toString() : Date.now().toString() };
+      
+      // Se for uma rodada nova que não vimos ainda, processa!
+      if (resultado.round_id !== lastRoundId) {
+        log(`📊 Nova rodada detectada via API: ${resultado.multiplier}x (ID: ${resultado.round_id})`);
+        analisarRodada(resultado);
+      }
+    }
+
   } catch (err) {
-    return null;
+    // Se der erro 404, pode ser que o caminho exato da API deles seja um pouco diferente
+    log("⚠️ Erro ao consultar API de resultados (Buscando rotas alternativas...):", err.message);
   }
 }
 
-function iniciarSocket() {
-  log("🔌 Conectando ao barramento Socket.io...");
-
-  // Passa headers idênticos aos de um navegador para burlar o bloqueio inicial do Render
-  currentSocket = io(BASE_URL, {
-    path: '/socket.io/',
-    transports: ['websocket'],
-    secure: true,
-    rejectUnauthorized: false,
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 4000,
-    extraHeaders: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Origin': BASE_URL,
-      'Referer': BASE_URL + '/'
-    }
-  });
-
-  currentSocket.on('connect', () => {
-    log("✅ Conectado com sucesso à Betou!");
-    
-    // Envia comandos de escuta caso a sala do crash exija registro prévio
-    currentSocket.emit('join', { room: 'crash' });
-    currentSocket.emit('subscribe', 'crash');
-  });
-
-  // Captura absolutamente qualquer evento transmitido pelo servidor da casa de apostas
-  currentSocket.onAny((evento, dados) => {
-    if (['connect', 'disconnect', 'connect_error', 'error'].includes(evento)) return;
-
-    const resultado = extrairMultiplicador(dados);
-    if (resultado) {
-      log(`📊 Rodada capturada [Canal: ${evento}]:`, resultado.multiplier);
-      analisarRodada(resultado);
-    }
-  });
-
-  currentSocket.on('connect_error', (err) => {
-    log("⚠️ Tentando transpor bloqueio de porta física... Erro atual:", err.message);
-  });
-
-  currentSocket.on('disconnect', (motivo) => {
-    log("🔄 Conexão interrompida pelo servidor. Motivo:", motivo);
-  });
+function iniciarMonitoramento() {
+  log("📡 Iniciando monitoramento via requisições HTTP seguras...");
+  
+  // Executa a busca a cada 3 segundos (tempo ideal para pegar logo após o crash)
+  pollingInterval = setInterval(buscarRodadasNaAPI, 3000);
 }
 
 app.post('/telegram-webhook', (req, res) => {
@@ -196,13 +169,14 @@ app.post('/telegram-webhook', (req, res) => {
 app.get('/', (_, res) => {
   res.json({
     status: 'online',
+    mode: 'HTTP Polling',
     chats: targetChatIds.size,
     rounds: rounds.length
   });
 });
 
-iniciarSocket();
+iniciarMonitoramento();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor central operando na porta ${PORT}`);
+  log(`🚀 Servidor HTTP ativo na porta ${PORT}`);
 });
