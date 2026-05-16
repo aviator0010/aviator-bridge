@@ -4,10 +4,8 @@ const cors = require('cors');
 const axios = require('axios');
 const http = require('http');
 
+// 💡 CORREÇÃO DE PORTA: O Render exige ler estritamente a variável PORT fornecida pelo sistema deles
 const PORT = process.env.PORT || 8080;
-// URL do seu projeto no Render (Ex: https://onrender.com)
-// O Render preenche isso automaticamente, mas se preferir, pode colar o link direto aqui.
-const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -21,13 +19,11 @@ if (!token) {
   process.exit(1);
 }
 
-// 🛡️ SOLUÇÃO ERRO 409: Desativamos o polling por completo. O bot agora opera via WEBHOOK.
+// Inicializa o Bot com Polling desligado para operar estritamente via Webhook (Zero Erro 409)
 const bot = new TelegramBot(token, { polling: false });
 
-// Feed de dados central da Spribe (Leitura universal estável do Aviator)
 const AVIATOR_API_URL = 'https://spribegaming.com';
 
-// 🏛️ Matriz de Plataformas: O robô simula a varredura e indica onde a tendência está pagando
 const PLATAFORMAS = [
   { nome: "Betou", url: "https://betou.bet.br" },
   { nome: "EstrelaBet", url: "https://estrelabet.com" },
@@ -42,22 +38,19 @@ function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
 }
 
-// Estratégia de Inteligência Artificial Avançada para Alvos de 2.00x a 5.00x
 function analisarTendenciaEstrategica(mults) {
   let score = 0;
-  let redsSeguidos = 0; // Para nossa meta, qualquer vela abaixo de 2.00x é considerada "Red"
+  let redsSeguidos = 0;
 
   for (let i = 0; i < mults.length; i++) {
     if (mults[i] < 2.0) redsSeguidos++;
     else break;
   }
 
-  // Padrão de Exaustão de Amostragem (Gatilhos de Alta Assertividade)
-  if (redsSeguidos === 3) score += 75; // Excelente momento de reversão de mercado
-  if (redsSeguidos === 4) score += 90; // Zona de máxima probabilidade para 2x+
-  if (redsSeguidos >= 5) score += 98;  // Alerta Máximo: Vela rosa/alta iminente
+  if (redsSeguidos === 3) score += 75;
+  if (redsSeguidos === 4) score += 90;
+  if (redsSeguidos >= 5) score += 98;
 
-  // Filtro de consistência dos últimos 10 minutos
   const ultimos10 = mults.slice(0, 10);
   const totalNaMeta = ultimos10.filter(v => v >= 2.0 && v <= 5.0).length;
   if (totalNaMeta >= 3) score += 10; 
@@ -69,8 +62,6 @@ function enviarSinalAutomatico(multiplicadorAnterior, score) {
   if (!targetChatIds.size) return;
 
   const horario = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  
-  // Sonda e escolhe a plataforma ativa da nossa matriz de forma inteligente
   const plataformaAlvo = PLATAFORMAS[Math.floor(Math.random() * PLATAFORMAS.length)];
 
   const texto = 
@@ -99,7 +90,7 @@ function enviarSinalAutomatico(multiplicadorAnterior, score) {
 
   targetChatIds.forEach(chatId => {
     bot.sendMessage(chatId, texto, opcoes)
-      .then(() => log(`✅ Sinal 24h enviado com sucesso para o chat ${chatId}`))
+      .then(() => log(`✅ Sinal enviado com sucesso para o chat ${chatId}`))
       .catch((err) => log(`❌ Erro no envio físico para o chat ${chatId}:`, err.message));
   });
 }
@@ -119,9 +110,7 @@ function processarRodadaEmTempoReal(nova) {
 
   const analise = analisarTendenciaEstrategica(rounds);
 
-  // Se atingir o critério de alta probabilidade, o sinal é disparado automaticamente 24h
   if (analise.score >= 70) {
-    log(`🎯 Padrão de Alvo Confirmado (${analise.score}%). Disparando sinal...`);
     enviarSinalAutomatico(nova.multiplier, analise.score);
   }
 }
@@ -139,7 +128,7 @@ async function coletarDadosAviator() {
     let dados = resposta.data;
     if (!dados || !Array.isArray(dados.history)) return;
 
-    const ultimaRodada = dados.history[0];
+    const ultimaRodada = dados.history;
     const multiplier = parseFloat(ultimaRodada.crash_value || ultimaRodada.value || ultimaRodada.multiplier);
     const round_id = (ultimaRodada.id || ultimaRodada.round_id || ultimaRodada.game_id).toString();
 
@@ -147,22 +136,21 @@ async function coletarDadosAviator() {
       processarRodadaEmTempoReal({ multiplier, round_id });
     }
   } catch (err) {
-    // Absorve oscilações normais de rede da API para manter o robô estável 24h
+    // Mantém o monitoramento resiliente mesmo sob oscilações de rede externa
   }
 }
 
-// 🌐 Configuração do Webhook e rotas de recebimento do Express
+// Rota de recepção do Webhook do Telegram
 app.post(`/telegram-webhook/${token}`, (req, res) => {
   res.sendStatus(200);
   
-  // Escuta comandos diretamente da API do Telegram (Sem Polling conflituoso)
   if (req.body && req.body.message) {
     const msg = req.body.message;
     const chatId = msg.chat.id;
 
     if (!targetChatIds.has(chatId)) {
       targetChatIds.add(chatId);
-      log(`📡 Novo chat/grupo vinculado com sucesso! ID: ${chatId}`);
+      log(`📡 Novo canal/grupo registrado! ID: ${chatId}`);
     }
 
     if (msg.text === '/start') {
@@ -185,29 +173,34 @@ app.get('/', (_, res) => {
   });
 });
 
-// Inicialização Limpa e Segura do Sistema
 async function inicializarServidor() {
   try {
-    log("🔗 Configurando Webhook exclusivo junto aos servidores do Telegram...");
+    log("🔗 Validando parâmetros de rede com os servidores do Telegram...");
     
-    // Vincula o bot do Telegram diretamente ao seu domínio do Render
-    if (RENDER_EXTERNAL_URL.includes('onrender.com') || RENDER_EXTERNAL_URL.includes('https')) {
-      await bot.setWebhook(`${RENDER_EXTERNAL_URL}/telegram-webhook/${token}`, { drop_pending_updates: true });
-      log("✅ Webhook instalado e blindado contra erros 409!");
+    // 💡 SOLUÇÃO DA URL DO WEBHOOK: O Render gera automaticamente a variável RENDER_EXTERNAL_URL (Ex: https://onrender.com)
+    // Forçamos a conversão para HTTPS pois o Telegram rejeita conexões HTTP puras ou com portas explícitas na URL pública do Webhook
+    let urlPublica = process.env.RENDER_EXTERNAL_URL;
+    
+    if (urlPublica) {
+      urlPublica = urlPublica.replace('http://', 'https://'); // Força protocolo seguro HTTPS exigido pelo Telegram
+      
+      log(`📡 Registrando Webhook seguro em: ${urlPublica}/telegram-webhook/${token}`);
+      await bot.setWebhook(`${urlPublica}/telegram-webhook/${token}`, { drop_pending_updates: true });
+      log("✅ Webhook instalado e validado com sucesso!");
     } else {
-      log("⚠️ Rodando localmente. Para ativar os comandos do Telegram, configure o Webhook na nuvem.");
+      log("⚠️ RENDER_EXTERNAL_URL ausente. Rodando localmente ou aguardando propagação do ambiente de rede.");
     }
 
-    // Inicia o motor de looping de 5 em 5 segundos para coletar dados reais do Aviator
-    log("📡 Motor de Sonda Global Iniciado. Capturando rodadas...");
+    log("📡 Sonda global ativada. Escutando decolagens do Aviator...");
     setInterval(coletarDadosAviator, 5000);
 
   } catch (err) {
-    log("❌ Falha crítica na inicialização:", err.message);
+    log("❌ Erro ao configurar Webhook:", err.message);
   }
 }
 
+// O Render escuta na porta física interna. Não mude o formato do listen abaixo.
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Servidor central ativo e escutando na porta ${PORT}`);
+  log(`🚀 Servidor central ativo e escutando na porta interna de contêiner: ${PORT}`);
   inicializarServidor();
 });
