@@ -18,13 +18,15 @@ if (!token) {
   process.exit(1);
 }
 
+// Inicializa o Bot com polling ativo
 const bot = new TelegramBot(token, { polling: true });
 
+// URL estruturada direto do ecossistema central da Spribe (Aviator global)
 const AVIATOR_API_URL = 'https://spribegaming.com';
 
-// 🔗 CONFIGURE AQUI A PLATAFORMA QUE VOCÊ QUER DIVULGAR NO SINAL
-const NOME_PLATAFORMA = "EstrelaBet"; 
-const LINK_PLATAFORMA = "https://estrelabet.com"; // Cole aqui o seu link de afiliado se tiver
+// Configuração de direcionamento do sinal para a sua plataforma alvo
+const NOME_PLATAFORMA = "Betou"; 
+const LINK_PLATAFORMA = "https://betou.bet.br"; 
 
 let targetChatIds = new Set();
 let rounds = [];
@@ -34,24 +36,33 @@ function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
 }
 
+// 🟢 SOLUÇÃO ERRO 409: Limpa sessões antigas presas antes de validar os novos pacotes
+bot.getUpdates({ offset: -1 }).then(() => {
+  log("🧹 Conexões fantasmas do Telegram limpas com sucesso.");
+}).catch((err) => {
+  log("⚠️ Aviso na limpeza de buffer do Telegram:", err.message);
+});
+
+// Captura automática do ID do canal/grupo quando o usuário digita /start
 bot.on('message', (msg) => {
   if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;
 
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    log("📡 Novo chat/canal ativado:", chatId);
+    log("📡 Novo chat/canal ativado e monitorado:", chatId);
   }
 
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `✈️ **Robô Aviator Profissional Lançado!**\n\n🎯 Alvo Principal: **2.00x até 5.00x**\n📡 Monitoramento do feed central ativo 24/7.`,
+      `✈️ **Robô Aviator Profissional Lançado!**\n\n🎯 Alvo Principal: **2.00x até 5.00x**\n📡 Monitoramento do feed central ativo na plataforma **${NOME_PLATAFORMA}**.`,
       { parse_mode: 'Markdown' }
     );
   }
 });
 
+// Lógica de cálculo matemático focada estritamente na zona de 2x a 5x
 function calcularEstrategiaAviator(mults) {
   let score = 0;
   let redsSeguidos = 0;
@@ -61,6 +72,7 @@ function calcularEstrategiaAviator(mults) {
     else break;
   }
 
+  // Padrão de Análise de Sequência (Gatilho de Probabilidade)
   if (redsSeguidos === 3) score += 40;
   if (redsSeguidos === 4) score += 25;
   if (redsSeguidos >= 5) score += 15;
@@ -90,7 +102,6 @@ function enviarSinalTelegram(multiplicadorAnterior, score) {
 - Faça o primeiro Auto-Cashout em 2.00x
 - Deixe uma proteção buscar a zona de 5.00x`;
 
-  // Cria o botão profissional embaixo da mensagem do sinal
   const opcoes = {
     parse_mode: 'Markdown',
     reply_markup: {
@@ -140,7 +151,8 @@ async function buscarDadosProvedorAviator() {
     let dados = resposta.data;
     if (!dados || !Array.isArray(dados.history)) return;
 
-    const ultimaRodada = dados.history[0];
+    // Isola e desmembra os pacotes da última decolagem do jogo
+    const ultimaRodada = dados.history;
     const multiplier = parseFloat(ultimaRodada.crash_value || ultimaRodada.value || ultimaRodada.multiplier);
     const round_id = (ultimaRodada.id || ultimaRodada.round_id || ultimaRodada.game_id).toString();
 
@@ -148,12 +160,13 @@ async function buscarDadosProvedorAviator() {
       analisarNovaRodada({ multiplier, round_id });
     }
   } catch (err) {
-    // Silencia oscilações de rede
+    // try/catch genérico para absorver variações momentâneas da API e não derrubar o script
   }
 }
 
 function iniciarRobo() {
   log("📡 Conectando ao barramento global de estatísticas do Aviator...");
+  // Consulta a API a cada 5 segundos de forma contínua
   setInterval(buscarDadosProvedorAviator, 5000);
 }
 
@@ -161,12 +174,13 @@ app.get('/', (_, res) => {
   res.json({
     status: 'online',
     game: 'Aviator',
-    plataforma_alvo: NOME_PLATAFORMA
+    plataforma_alvo: NOME_PLATAFORMA,
+    chats_ativos: targetChatIds.size
   });
 });
 
 iniciarRobo();
 
 server.listen(PORT, '0.0.0.0', () => {
-  log(`🚀 Robô Aviator Operando com sucesso na porta ${PORT}`);
+  log(`🚀 Servidor central operando perfeitamente na porta ${PORT}`);
 });
