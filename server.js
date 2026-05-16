@@ -18,13 +18,11 @@ if (!token) {
   process.exit(1);
 }
 
-// Inicializa o Bot com polling ativo
-const bot = new TelegramBot(token, { polling: true });
+// 🛑 CORREÇÃO DEFINITIVA DO ERRO 409:
+// Criamos o objeto desativando temporariamente o polling automático automático
+const bot = new TelegramBot(token, { polling: false });
 
-// URL estruturada direto do ecossistema central da Spribe (Aviator global)
 const AVIATOR_API_URL = 'https://spribegaming.com';
-
-// Configuração de direcionamento do sinal para a sua plataforma alvo
 const NOME_PLATAFORMA = "Betou"; 
 const LINK_PLATAFORMA = "https://betou.bet.br"; 
 
@@ -36,33 +34,46 @@ function log(...msg) {
   console.log(new Date().toLocaleTimeString(), '-', ...msg);
 }
 
-// 🟢 SOLUÇÃO ERRO 409: Limpa sessões antigas presas antes de validar os novos pacotes
-bot.getUpdates({ offset: -1 }).then(() => {
-  log("🧹 Conexões fantasmas do Telegram limpas com sucesso.");
-}).catch((err) => {
-  log("⚠️ Aviso na limpeza de buffer do Telegram:", err.message);
-});
+// Rotina obrigatória para limpar webhooks e forçar a derrubada de robôs duplicados
+async function resolverConflitoTelegram() {
+  try {
+    log("🧹 Limpando buffers e destruindo conexões duplicadas no Telegram...");
+    await bot.deleteWebhook({ drop_pending_updates: true });
+    await bot.getUpdates({ offset: -1, limit: 1, timeout: 0 });
+    
+    // Liga o recebimento de mensagens apenas após garantir que a linha está totalmente limpa
+    bot.startPolling({ restart: true });
+    log("✅ Polling limpo e ativado com exclusividade!");
+  } catch (err) {
+    log("⚠️ Erro ao tentar limpar conexões antigas, reiniciando fluxo:", err.message);
+    // Tenta ligar mesmo com aviso para não travar a aplicação
+    bot.startPolling({ restart: true });
+  }
+}
 
-// Captura automática do ID do canal/grupo quando o usuário digita /start
 bot.on('message', (msg) => {
   if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;
 
   if (!targetChatIds.has(chatId)) {
     targetChatIds.add(chatId);
-    log("📡 Novo chat/canal ativado e monitorado:", chatId);
+    log(`📡 Canal de destino registrado! ID do Chat: ${chatId}`);
   }
 
   if (msg.text === '/start') {
     bot.sendMessage(
       chatId,
-      `✈️ **Robô Aviator Profissional Lançado!**\n\n🎯 Alvo Principal: **2.00x até 5.00x**\n📡 Monitoramento do feed central ativo na plataforma **${NOME_PLATAFORMA}**.`,
+      `✈️ **Robô Aviator Profissional Lançado!**\n\n🎯 Alvo Principal: **2.00x até 5.00x**\n📡 Monitoramento ativo na plataforma **${NOME_PLATAFORMA}**.\n\n💡 Use o comando \`/teste\` para forçar um envio agora!`,
       { parse_mode: 'Markdown' }
     );
   }
+
+  if (msg.text === '/teste') {
+    log(`🛠️ Disparando sinal forçado de teste para o chat: ${chatId}`);
+    enviarSinalTelegram(2.80, 100);
+  }
 });
 
-// Lógica de cálculo matemático focada estritamente na zona de 2x a 5x
 function calcularEstrategiaAviator(mults) {
   let score = 0;
   let redsSeguidos = 0;
@@ -72,21 +83,19 @@ function calcularEstrategiaAviator(mults) {
     else break;
   }
 
-  // Padrão de Análise de Sequência (Gatilho de Probabilidade)
-  if (redsSeguidos === 3) score += 40;
-  if (redsSeguidos === 4) score += 25;
-  if (redsSeguidos >= 5) score += 15;
-
-  const ultimos10 = mults.slice(0, 10);
-  const greensDesejados = ultimos10.filter(v => v >= 2.0 && v <= 5.0).length;
-
-  if (greensDesejados >= 3) score += 20;
+  if (redsSeguidos === 3) score += 70;
+  if (redsSeguidos === 4) score += 85;
+  if (redsSeguidos >= 5) score += 95;
 
   return { score, redsSeguidos };
 }
 
 function enviarSinalTelegram(multiplicadorAnterior, score) {
-  if (!targetChatIds.size) return;
+  if (!targetChatIds.size) {
+    log("⚠️ Tentativa de sinal cancelada: Nenhum chat ativo. Digite /start no bot.");
+    return;
+  }
+  
   const horario = new Date().toLocaleTimeString('pt-BR');
 
   const texto = 
@@ -114,7 +123,9 @@ function enviarSinalTelegram(multiplicadorAnterior, score) {
   };
 
   targetChatIds.forEach(chatId => {
-    bot.sendMessage(chatId, texto, opcoes).catch(() => {});
+    bot.sendMessage(chatId, texto, opcoes)
+      .then(() => log(`✅ Sinal enviado com sucesso para o chat ${chatId}`))
+      .catch((err) => log(`❌ Erro no envio físico para o Telegram:`, err.message));
   });
 }
 
@@ -129,11 +140,12 @@ function analisarNovaRodada(nova) {
   
   log(`📊 Rodada Aviator Detectada: ${nova.multiplier.toFixed(2)}x`);
 
-  if (rounds.length < 5) return;
+  if (rounds.length < 3) return;
 
   const analise = calcularEstrategiaAviator(rounds);
 
   if (analise.score >= 65) {
+    log(`🎯 Padrão Identificado! Pontuação: ${analise.score}. Gerando alerta...`);
     enviarSinalTelegram(nova.multiplier, analise.score);
   }
 }
@@ -151,7 +163,6 @@ async function buscarDadosProvedorAviator() {
     let dados = resposta.data;
     if (!dados || !Array.isArray(dados.history)) return;
 
-    // Isola e desmembra os pacotes da última decolagem do jogo
     const ultimaRodada = dados.history;
     const multiplier = parseFloat(ultimaRodada.crash_value || ultimaRodada.value || ultimaRodada.multiplier);
     const round_id = (ultimaRodada.id || ultimaRodada.round_id || ultimaRodada.game_id).toString();
@@ -160,13 +171,16 @@ async function buscarDadosProvedorAviator() {
       analisarNovaRodada({ multiplier, round_id });
     }
   } catch (err) {
-    // try/catch genérico para absorver variações momentâneas da API e não derrubar o script
+    // Mantém o loop ativo mesmo se a API oscilar
   }
 }
 
-function iniciarRobo() {
-  log("📡 Conectando ao barramento global de estatísticas do Aviator...");
-  // Consulta a API a cada 5 segundos de forma contínua
+async function inicializarSistemaCompleto() {
+  // 1. Executa a limpeza física de conflito de polling do token
+  await resolverConflitoTelegram();
+  
+  // 2. Inicia a escuta contínua das decolagens do Aviator
+  log("📡 Conectando ao barramento universal de estatísticas do Aviator...");
   setInterval(buscarDadosProvedorAviator, 5000);
 }
 
@@ -179,7 +193,8 @@ app.get('/', (_, res) => {
   });
 });
 
-iniciarRobo();
+// Dispara o fluxo ordenado de inicialização
+inicializarSistemaCompleto();
 
 server.listen(PORT, '0.0.0.0', () => {
   log(`🚀 Servidor central operando perfeitamente na porta ${PORT}`);
